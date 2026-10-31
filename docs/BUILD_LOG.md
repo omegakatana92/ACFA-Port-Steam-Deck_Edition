@@ -237,3 +237,38 @@ logging, error handling and process exit. It does **not** verify guest execution
 **Verified**
 
 Run performed; no game data present.
+
+---
+
+## 10. 2026-10-31 — `acfa-vk-smoke` — Ubuntu 22.04 / GCC 11.4 / Mesa lavapipe
+
+**Command**
+
+```bash
+cmake -S . -B /tmp/acfa-linux ... -DACFA_BUILD_TESTS=ON
+cmake --build /tmp/acfa-linux -j8
+ctest --test-dir /tmp/acfa-linux --output-on-failure
+```
+
+**Result**
+
+```
+Vulkan device: llvmpipe (LLVM 15.0.7, 256 bits) (API 1.3.255)
+clear/readback OK (64 x 64, first pixel 64,128,191,255)
+2/2 tests passed
+```
+
+**Cause / purpose**
+
+Stage 1 foundation check: instance, physical/logical device, queue, image, memory, command buffer,
+clear, copy and readback. It deliberately does not create a swapchain or compile shaders yet.
+
+**Fix**
+
+None needed. The test is built only on Linux when `find_package(Vulkan)` succeeds.
+
+**Verified**
+
+Passed on llvmpipe. This is not GPU-driver testing and not game rendering; the Steam Deck's AMD
+driver remains untested.
+

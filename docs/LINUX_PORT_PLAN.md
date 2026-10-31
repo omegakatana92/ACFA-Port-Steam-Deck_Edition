@@ -377,6 +377,12 @@ clears, copies, updates, releases, immediate callbacks), presentation and displa
 
 ### 8.4 Staged plan and gates
 
+**Verified foundation (2026-10-31).** `acfa-vk-smoke` creates a Vulkan instance and device, allocates
+an offscreen image, clears it, copies it to a host-visible buffer and verifies the pixels. It ran
+successfully on Mesa lavapipe (`llvmpipe`, Vulkan 1.3.255) and is a CTest test when
+`-DACFA_BUILD_TESTS=ON`. This covers device/queue/image/memory/command-buffer/readback only — not a
+swapchain, shaders or the game renderer.
+
 | Stage | Work | Gate (no game data required) |
 | --- | --- | --- |
 | 0 | Freeze a backend interface; remove `DXGI_FORMAT`/D3D types from shared structs | D3D11 still builds; descriptor hashes stable |
@@ -485,11 +491,11 @@ Only after the Vulkan renderer and a real game run are verified:
 | 2 — AC4 comparison | **complete** (documented; no code copied) |
 | 3 — Linux build system and tools | **complete and verified**; Windows build unverified |
 | 4 — Native Linux runtime | **core compiles and starts**; game-data run untested; input/audio/window implemented; settings overlay missing |
-| 5 — Native graphics | **not started**; staged plan and blockers identified |
+| 5 — Native graphics | **foundation only**: verified headless Vulkan clear/readback; no swapchain, shaders or game rendering |
 | 6 — Steam Deck integration | **not started**; prerequisites not met |
 | 7 — AppImage | **not started**; must not start before Phase 5/6 verification |
 | 8 — GitHub release | **not started** |
 
-The next milestone is Stage 1 of §8.4: a Vulkan device/swapchain and test-pattern presentation,
-followed by Stage 2's synthetic draw. No packaging work will be published before the renderer and
-a real game run are verified.
+The next milestone is Stage 1 of §8.4: a Vulkan swapchain and test-pattern presentation. The
+headless clear/readback gate already passes; no packaging work will be published before the
+renderer and a real game run are verified.

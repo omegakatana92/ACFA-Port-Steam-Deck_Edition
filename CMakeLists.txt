@@ -258,6 +258,18 @@ if(ACFA_BUILD_TESTS)
   target_link_libraries(acfa-host-tests PRIVATE acfa_common)
   target_compile_options(acfa-host-tests PRIVATE -Wall -Wextra)
   add_test(NAME host_tests COMMAND acfa-host-tests)
+
+  # Vulkan foundation gate: instance/device/image/clear/readback, headless (lavapipe works).
+  if(NOT WIN32)
+    find_package(Vulkan QUIET)
+    if(Vulkan_FOUND)
+      add_executable(acfa-vk-smoke src/runtime/gpu/vulkan/vk_clear_test.cpp)
+      target_link_libraries(acfa-vk-smoke PRIVATE Vulkan::Vulkan)
+      add_test(NAME vulkan_clear COMMAND acfa-vk-smoke)
+    else()
+      message(STATUS "Vulkan not found: the Vulkan clear smoke test is not built")
+    endif()
+  endif()
 endif()
 
 # ---- media decoder test tool (development: checks the MPEG-2 decoder on the user's movies) ----
