@@ -8,14 +8,17 @@
 // Writes are transactional: file operations act on an in-memory copy, and only a sequence that
 // the game finishes successfully is committed, by writing a complete new directory and swapping it
 // in (an interrupted commit is repaired the next time the directory is used).
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#else
+#include <sys/stat.h>
+#endif
+
 #include <algorithm>
 #include <filesystem>
 #include <map>
 #include <set>
-
-#ifndef _WIN32
-#include <sys/stat.h>
-#endif
 
 #include "common/file.h"
 #include "common/sfo.h"

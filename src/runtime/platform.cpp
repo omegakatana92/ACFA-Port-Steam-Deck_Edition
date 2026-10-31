@@ -26,14 +26,6 @@ u64 ft_us(const FILETIME& t) {
   return v / 10;
 }
 
-std::string wide_to_utf8(const std::wstring& w) {
-  if (w.empty()) return {};
-  int n = WideCharToMultiByte(CP_UTF8, 0, w.data(), int(w.size()), nullptr, 0, nullptr, nullptr);
-  std::string s(size_t(n), '\0');
-  WideCharToMultiByte(CP_UTF8, 0, w.data(), int(w.size()), s.data(), n, nullptr, nullptr);
-  return s;
-}
-
 }  // namespace
 
 u64 monotonic_us() {
@@ -93,7 +85,7 @@ void wait_atomic_u32(std::atomic<u32>* a, u32 expected, u32 timeout_ms) {
   WaitOnAddress(reinterpret_cast<volatile void*>(a), &expected, sizeof expected, timeout_ms);
 }
 
-void notify_all_atomic_u32(std::atomic<u32>* a) { WakeByAddressAll(reinterpret_cast<volatile void*>(a)); }
+void notify_all_atomic_u32(std::atomic<u32>* a) { WakeByAddressAll(reinterpret_cast<void*>(a)); }
 
 u32 cpu_count() {
   DWORD_PTR mask = 0, sys = 0;

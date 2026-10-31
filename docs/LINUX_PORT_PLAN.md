@@ -37,7 +37,7 @@ verified.
 | Recompilers and shared libraries on Linux | **build and run** (verified) |
 | Linux runtime translation units | **all compile** (verified) |
 | Linux runtime executable | **links and starts** (verified with a synthetic PPU table) |
-| Windows full-build validation in this environment | **not performed** (no llvm-mingw toolchain; see BUILD_LOG) |
+| Windows full build with the pinned llvm-mingw toolchain | **verified** (runtime, launcher, tools, host tests; start-up to the no-data error) |
 
 **Headline findings**
 
@@ -165,15 +165,16 @@ $ ./acfa --data /tmp/acfa-data
 That is the expected stop without game data: guest memory reservation, platform init, logging and
 error handling work. It is **not** evidence that any game code runs.
 
-### 3.4 Windows build caveat
+### 3.4 Windows validation
 
-The audit host has LLVM/Clang and MinGW-w64 installed but not the llvm-mingw toolchain the project
-uses (`data/toolchain.txt`, downloaded by the launcher). A full Windows configure/build was
-therefore not attempted as a release check. One partial configure with a mismatched
-Clang/MSVC/MinGW environment failed on unrelated manifest and compiler-rt symbols; see
-`docs/BUILD_LOG.md`. **Windows remains unvalidated for this branch** until a build with the
-pinned llvm-mingw toolchain is run. The Windows code paths were preserved behind `_WIN32`, and the
-changed common files compile under the Windows headers.
+The pinned llvm-mingw 20260908 toolchain from `data/toolchain.txt` was downloaded and used for a
+full Windows build. `acfa.exe`, `acfa-prep.exe`, `acfa-recomp.exe`, `acfa-spurecomp.exe`,
+`ACFA-Launcher.exe` and `acfa-host-tests.exe` build; the host tests pass on Windows; `acfa.exe`
+starts, writes settings and a run log, and stops at the expected missing-`eboot.elf` error. The
+fixes required (a missing Windows include in `save_data.cpp`, a volatile-qualified wake pointer,
+a missing Windows include in `rsx_core.cpp`, and excluding the Linux overlay stub from the Windows
+glob) are recorded in `docs/BUILD_LOG.md` entry 11. Real game data and the D3D11 renderer with real
+shaders remain untested.
 
 ---
 
@@ -489,7 +490,7 @@ Only after the Vulkan renderer and a real game run are verified:
 | --- | --- |
 | 1 — Audit and this document | **complete** |
 | 2 — AC4 comparison | **complete** (documented; no code copied) |
-| 3 — Linux build system and tools | **complete and verified**; Windows build unverified |
+| 3 — Linux build system and tools | **complete and verified**; Windows build also verified with the pinned toolchain |
 | 4 — Native Linux runtime | **core compiles and starts**; game-data run untested; input/audio/window implemented; settings overlay missing |
 | 5 — Native graphics | **foundation only**: verified headless Vulkan clear/readback; no swapchain, shaders or game rendering |
 | 6 — Steam Deck integration | **not started**; prerequisites not met |

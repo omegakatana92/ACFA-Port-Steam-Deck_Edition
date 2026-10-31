@@ -272,3 +272,45 @@ None needed. The test is built only on Linux when `find_package(Vulkan)` succeed
 Passed on llvmpipe. This is not GPU-driver testing and not game rendering; the Steam Deck's AMD
 driver remains untested.
 
+---
+
+## 11. 2026-10-31 — full Windows build — Windows 11 / llvm-mingw 20260908 / LLVM 23.1.1
+
+**Command**
+
+```powershell
+cmake -S . -B %TEMP%\acfa-win-llvm -G Ninja -DCMAKE_BUILD_TYPE=Release `
+  -DCMAKE_C_COMPILER=<llvm-mingw>\bin\clang.exe `
+  -DCMAKE_CXX_COMPILER=<llvm-mingw>\bin\clang++.exe `
+  -DCMAKE_RC_COMPILER=<llvm-mingw>\bin\llvm-rc.exe -DACFA_BUILD_TESTS=ON
+cmake --build %TEMP%\acfa-win-llvm -j8
+```
+
+**Errors and fixes (in order)**
+
+1. `save_data.cpp`: `WIN32_FILE_ATTRIBUTE_DATA` unknown after the portable include split. Include
+   `<windows.h>` under `_WIN32`.
+2. `platform.cpp`: `WakeByAddressAll(volatile void*)` does not match `PVOID`. Drop the volatile
+   qualifier on the wake path (`WaitOnAddress` keeps it).
+3. `rsx_core.cpp`: `WaitOnAddress`/`WakeByAddressAll` undeclared after removing the unconditional
+   `<windows.h>` include. Include it under `_WIN32`.
+4. Link: `rt::ui::on_wheel`/`tick`/`pad_mode`/`pad_suppressed`/`dialog_hit`/`render` defined twice —
+   the source glob picked up `ui/overlay_stub.cpp` on Windows. Exclude the Linux stub on Windows.
+
+A CMake 4.3 quirk also required forward slashes for `CMAKE_RC_COMPILER` (a Windows path with
+backslashes was written raw into `CMakeRCCompiler.cmake`).
+
+**Result**
+
+`acfa.exe`, `acfa-prep.exe`, `acfa-recomp.exe`, `acfa-spurecomp.exe`, `ACFA-Launcher.exe` and
+`acfa-host-tests.exe` all build with the project's pinned llvm-mingw toolchain. Host tests pass on
+Windows. `acfa.exe` starts, loads settings, creates a run directory, builds the synthetic function
+table, and exits 1 with `cannot open .../eboot.elf` — the expected no-data path.
+
+**Verified**
+
+Windows full build and start-up verified with the pinned toolchain, using the synthetic
+non-game PPU table. A real game-data run and the D3D11 renderer with real shaders remain untested.
+This supersedes entry 8's environment limitation.
+
+

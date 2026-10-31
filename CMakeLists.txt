@@ -165,6 +165,7 @@ if(ACFA_GEN_SRC)
   target_compile_options(acfa_spu_gen PRIVATE -O2 ${ACFA_CPU_FLAGS} -fno-strict-aliasing -w)
 
   if(WIN32)
+    list(REMOVE_ITEM ACFA_RT_SRC ${CMAKE_SOURCE_DIR}/src/runtime/ui/overlay_stub.cpp)
     add_executable(acfa ${ACFA_RT_SRC} ${ACFA_UTF8_RC} src/runtime/game.rc)
     if(NOT ACFA_DEV)  # players' builds open no console window (the run log holds every message)
       set_target_properties(acfa PROPERTIES WIN32_EXECUTABLE ON)

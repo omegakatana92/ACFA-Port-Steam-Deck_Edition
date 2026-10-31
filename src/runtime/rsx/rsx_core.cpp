@@ -1,5 +1,10 @@
 // RSX command processor: FIFO fetch (jump/call/return), method register file, sync methods
 // (reference, semaphores, labels, reports), memory transfer engines, flips and vblank.
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#endif
+
 #include <atomic>
 #include <chrono>
 #include <deque>
