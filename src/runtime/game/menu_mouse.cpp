@@ -16,9 +16,6 @@
 // strip, ▲ ▼ of a list) presses its direction. Dialogs whose scene moves their lists itself keep
 // no focused object (TUNE): the cursor leaves their focus alone. Nothing here changes the game's
 // state other than through those calls and presses.
-#define WIN32_LEAN_AND_MEAN
-#include <windows.h>
-
 #include "runtime/game/menu_mouse.h"
 
 #include <algorithm>
@@ -499,14 +496,12 @@ void frame(Ctx& ctx) {
     return;
   }
   // Hover: the item under the cursor takes the focus when the cursor moved or was clicked.
-  POINT p{};
+  int px = 0, py = 0;
   float gx = 0, gy = 0;
-  bool have = false;
-  HWND hwnd = static_cast<HWND>(gpu::window_handle());
-  if (!have && (!hwnd || !GetCursorPos(&p) || !ScreenToClient(hwnd, &p) || !to_game(p.x, p.y, &gx, &gy))) return;
-  bool moved = p.x != g_last_x || p.y != g_last_y || dialog != g_last_dialog;
-  g_last_x = p.x;
-  g_last_y = p.y;
+  if (!gpu::window_cursor_position(&px, &py) || !to_game(px, py, &gx, &gy)) return;
+  bool moved = px != g_last_x || py != g_last_y || dialog != g_last_dialog;
+  g_last_x = px;
+  g_last_y = py;
   g_last_dialog = dialog;
   float ox = 0, oy = 0;  // the cursor in the dialog's own coordinates (its objects' rects)
   dialog_origin(dialog, &ox, &oy);

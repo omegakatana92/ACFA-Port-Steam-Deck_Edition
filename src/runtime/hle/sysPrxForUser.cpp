@@ -1,11 +1,9 @@
 // HLE: sysPrxForUser (liblv2 user-space helpers).
-#define WIN32_LEAN_AND_MEAN
-#include <windows.h>
-
 #include <set>
 
 #include "runtime/guest_printf.h"
 #include "runtime/hle.h"
+#include "runtime/platform.h"
 #include "runtime/spu/spu_image.h"
 #include "runtime/lv2/lv2.h"
 #include "runtime/lv2/memory.h"
@@ -322,7 +320,7 @@ s32 sys_spinlock_lock(Ptr<be32> lock) {
   for (u32 spins = 0;; ++spins) {
     u32 expected = 0;
     if (p->compare_exchange_weak(expected, me)) return CELL_OK;
-    if (spins > 64) SwitchToThread();
+    if (spins > 64) platform::yield_cpu();
     else _mm_pause();
   }
 }

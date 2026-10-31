@@ -1,10 +1,7 @@
 // HLE: cellAudio. Ports are ring buffers of 256-sample blocks (big-endian float) in guest
 // memory; every period (256 samples at 48 kHz) the mixer consumes one block per started port,
 // advances the port read index, and sends CELL_AUDIO_EVENT_MIX to registered event queues.
-// The period clock follows the host device's consumption (WASAPI), so guest audio stays in sync.
-#define WIN32_LEAN_AND_MEAN
-#include <windows.h>
-
+// The period clock follows the host device's consumption, so guest audio stays in sync.
 #include <algorithm>
 #include <atomic>
 #include <cmath>
@@ -19,6 +16,7 @@
 #include "runtime/lv2/lv2.h"
 #include "runtime/lv2/sync.h"
 #include "runtime/memory.h"
+#include "runtime/platform.h"
 
 namespace rt {
 namespace lv2 {
@@ -172,7 +170,7 @@ u64 g_total_periods = 0, g_total_underruns = 0;
 // period length is trimmed by up to 0.5% toward a target queue level so the two clocks cannot
 // drift apart, and the queue's cushion is refilled with silence after an underrun.
 void audio_thread() {
-  SetThreadDescription(GetCurrentThread(), L"cellAudio");
+  platform::set_current_thread_name("cellAudio");
   bool dev = audio::out_init();
   std::vector<float> out(kSamples * 2), silence(kSamples * 2, 0.0f);
   const double period_us = double(kSamples) * 1e6 / 48000.0;

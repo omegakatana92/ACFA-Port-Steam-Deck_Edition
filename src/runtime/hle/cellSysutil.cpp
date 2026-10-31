@@ -1,11 +1,9 @@
 // HLE: cellSysutil (system parameters, video/audio output state, system callbacks, dialogs,
 // save data, game data).
-#define WIN32_LEAN_AND_MEAN
-#include <windows.h>
-
 #include <deque>
 
 #include "runtime/hle.h"
+#include "runtime/platform.h"
 #include "runtime/sysutil.h"
 
 namespace rt {
@@ -83,9 +81,8 @@ s32 cellSysutilGetSystemParamInt(s32 id, Ptr<bes32> value) {
     case 0x0114: v = 2; break;  // DATE_FORMAT: MMDDYYYY
     case 0x0115: v = 0; break;  // TIME_FORMAT: 12h
     case 0x0116: {              // TIMEZONE (minutes east of UTC)
-      TIME_ZONE_INFORMATION tzi{};
-      GetTimeZoneInformation(&tzi);
-      v = -s32(tzi.Bias);
+      bool daylight = false;
+      v = platform::utc_offset_seconds(&daylight) / 60;
       break;
     }
     case 0x0117: v = 0; break;  // SUMMERTIME

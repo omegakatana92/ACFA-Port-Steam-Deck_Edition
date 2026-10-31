@@ -1,8 +1,6 @@
 // HLE: cellRtc. Ticks are microseconds since 0001-01-01 00:00:00 (proleptic Gregorian).
-#define WIN32_LEAN_AND_MEAN
-#include <windows.h>
-
 #include "runtime/hle.h"
+#include "runtime/platform.h"
 
 namespace rt {
 namespace {
@@ -65,16 +63,11 @@ void set_from_tick(DateTime& t, u64 tick) {
   t.microsecond = u32(rem % 1000000ull);
 }
 s64 tz_offset_us() {
-  TIME_ZONE_INFORMATION tzi{};
-  DWORD r = GetTimeZoneInformation(&tzi);
-  s64 bias = tzi.Bias + (r == TIME_ZONE_ID_DAYLIGHT ? tzi.DaylightBias : 0);
-  return -bias * 60ll * 1000000ll;
+  bool daylight = false;
+  return s64(platform::utc_offset_seconds(&daylight)) * 1000000ll;
 }
 u64 utc_now_tick() {
-  FILETIME ft;
-  GetSystemTimePreciseAsFileTime(&ft);
-  u64 t = (u64(ft.dwHighDateTime) << 32) | ft.dwLowDateTime;  // 100 ns since 1601-01-01
-  return t / 10 + days_from_civil(1601, 1, 1) * kUsPerDay;
+  return platform::realtime_ns() / 1000ull + days_from_civil(1970, 1, 1) * kUsPerDay;
 }
 
 s32 cellRtcGetCurrentClockLocalTime(Ptr<DateTime> dt) {

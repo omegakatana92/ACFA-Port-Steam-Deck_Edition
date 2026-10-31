@@ -1,8 +1,5 @@
 #include "runtime/memory.h"
 
-#define WIN32_LEAN_AND_MEAN
-#include <windows.h>
-
 #include <algorithm>
 #include <atomic>
 #include <map>
@@ -11,6 +8,7 @@
 
 #include "ppu/ppu_recomp.h"
 #include "runtime/log.h"
+#include "runtime/platform.h"
 #include "runtime/ppu_runtime.h"
 #include "runtime/ppu_thread.h"
 
@@ -95,38 +93,26 @@ bool g_write_watch = false;
 
 bool init() {
   // Write tracking lets the renderer notice changed textures without hashing them every frame.
-  void* p = VirtualAlloc(base(), 0x100000000ull, MEM_RESERVE | MEM_WRITE_WATCH, PAGE_NOACCESS);
-  g_write_watch = p == base();
-  if (!g_write_watch) {
-    if (p) VirtualFree(p, 0, MEM_RELEASE);
-    p = VirtualAlloc(base(), 0x100000000ull, MEM_RESERVE, PAGE_NOACCESS);
-    LOG_W("vm", "guest write tracking unavailable; textures are re-checked by hashing");
-  }
-  if (p != base()) {
-    LOG_E("vm", "cannot reserve guest address space at %p (got %p, error %lu)", (void*)base(), p, GetLastError());
+  bool watching = false;
+  if (!platform::guest_reserve(base(), 0x100000000ull, true, &watching)) {
+    LOG_E("vm", "cannot reserve guest address space at %p", (void*)base());
     return false;
   }
+  g_write_watch = watching;
+  if (!g_write_watch) LOG_W("vm", "guest write tracking unavailable; textures are re-checked by hashing");
   return true;
 }
 
 bool take_written_pages(u32 begin, u32 size, std::vector<u32>& out) {
   if (!g_write_watch) return false;
-  static std::vector<void*> buf;
-  if (buf.size() < size / 0x1000 + 1) buf.resize(size / 0x1000 + 1);  // every page fits: one call
-  // Room for this range only: the call's cost grows with the output array passed, so the capacity
-  // left by one large query made every later small query slow (milliseconds after a 3 GiB query).
-  ULONG_PTR count = size / 0x1000 + 1;
-  DWORD gran = 0;
-  if (GetWriteWatch(WRITE_WATCH_FLAG_RESET, base() + begin, size, buf.data(), &count, &gran) != 0) return false;
-  for (ULONG_PTR i = 0; i < count; ++i) out.push_back(u32(static_cast<u8*>(buf[i]) - base()));
-  return true;
+  return platform::take_written_pages(base(), begin, size, out);
 }
 
 void commit(u32 addr, u32 size) {
   if (!size) return;
   u64 a = addr & ~0xfffull, e = (u64(addr) + size + 0xfff) & ~0xfffull;
-  if (!VirtualAlloc(base() + a, size_t(e - a), MEM_COMMIT, PAGE_READWRITE))
-    fatal(acfa::strprintf("guest commit failed at 0x%08x size 0x%x (error %lu)", addr, size, GetLastError()));
+  if (!platform::guest_commit(base() + a, size_t(e - a)))
+    fatal(acfa::strprintf("guest commit failed at 0x%08x size 0x%x", addr, size));
   mark_pages(a >> 12, e >> 12, true);
 }
 
@@ -135,7 +121,7 @@ void decommit(u32 addr, u32 size) {
   u64 a = (u64(addr) + 0xfff) & ~0xfffull, e = (u64(addr) + size) & ~0xfffull;
   if (e <= a) return;
   mark_pages(a >> 12, e >> 12, false);  // before the pages go: a check never finds them committed
-  VirtualFree(base() + a, size_t(e - a), MEM_DECOMMIT);
+  platform::guest_decommit(base() + a, size_t(e - a));
 }
 
 bool committed(u32 addr, u32 size) {

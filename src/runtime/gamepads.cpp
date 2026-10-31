@@ -15,6 +15,7 @@
 // 1.5 s. Nothing is written to the controllers.
 #include "runtime/gamepads.h"
 
+#ifdef _WIN32
 #include <hidsdi.h>
 #include <hidpi.h>
 #include <setupapi.h>
@@ -365,3 +366,152 @@ void vibrate(int slot, WORD left, WORD right) {
 }
 
 }  // namespace rt::pads
+
+#else  // POSIX: SDL3 game controller API
+
+#include <SDL3/SDL.h>
+
+#include <algorithm>
+#include <chrono>
+#include <cstring>
+#include <mutex>
+#include <string>
+#include <vector>
+
+#include "runtime/log.h"
+
+namespace rt::pads {
+namespace {
+
+using Clock = std::chrono::steady_clock;
+
+struct Open {
+  SDL_JoystickID id = 0;
+  SDL_Gamepad* pad = nullptr;
+};
+
+std::mutex g_mu;
+std::vector<Open> g_open;
+
+struct Snapshot {
+  XINPUT_STATE st{};
+  int index = -1;  // SDL joystick instance id (for rumble)
+};
+
+std::vector<Snapshot> g_snap;
+Clock::time_point g_snap_at{};
+bool g_sdl_ready = false;
+
+void ensure_sdl() {
+  if (!g_sdl_ready) {
+    // The window owns SDL_Init(SDL_INIT_VIDEO); the gamepad subsystem is independent.
+    SDL_InitSubSystem(SDL_INIT_GAMEPAD);
+    g_sdl_ready = true;
+  }
+}
+
+void sync_open_pads() {
+  int count = 0;
+  SDL_JoystickID* ids = SDL_GetGamepads(&count);
+  std::vector<Open> keep;
+  for (int i = 0; i < count; ++i) {
+    SDL_JoystickID id = ids[i];
+    Open* found = nullptr;
+    for (Open& o : g_open)
+      if (o.id == id) found = &o;
+    if (found) {
+      keep.push_back(*found);
+      continue;
+    }
+    if (SDL_Gamepad* g = SDL_OpenGamepad(id)) {
+      LOG_I("pad", "controller connected: %s", SDL_GetGamepadName(g));
+      keep.push_back({id, g});
+    }
+  }
+  if (ids) SDL_free(ids);
+  for (Open& o : g_open) {
+    bool alive = false;
+    for (const Open& k : keep) alive = alive || k.id == o.id;
+    if (!alive && o.pad) {
+      LOG_I("pad", "controller disconnected");
+      SDL_CloseGamepad(o.pad);
+    }
+  }
+  g_open = std::move(keep);
+}
+
+u8 trigger(SDL_Gamepad* g, SDL_GamepadAxis axis) {
+  int v = int(SDL_GetGamepadAxis(g, axis));  // 0..32767
+  return u8(std::clamp(v, 0, 32767) * 255 / 32767);
+}
+
+void refresh() {
+  auto now = Clock::now();
+  if (g_snap_at != Clock::time_point{} && now - g_snap_at < std::chrono::milliseconds(2)) return;
+  g_snap_at = now;
+  sync_open_pads();
+  g_snap.clear();
+  for (const Open& o : g_open) {
+    SDL_Gamepad* g = o.pad;
+    if (!g || !SDL_GamepadConnected(g)) continue;
+    XINPUT_GAMEPAD p{};
+    if (SDL_GetGamepadButton(g, SDL_GAMEPAD_BUTTON_DPAD_UP)) p.wButtons |= XINPUT_GAMEPAD_DPAD_UP;
+    if (SDL_GetGamepadButton(g, SDL_GAMEPAD_BUTTON_DPAD_DOWN)) p.wButtons |= XINPUT_GAMEPAD_DPAD_DOWN;
+    if (SDL_GetGamepadButton(g, SDL_GAMEPAD_BUTTON_DPAD_LEFT)) p.wButtons |= XINPUT_GAMEPAD_DPAD_LEFT;
+    if (SDL_GetGamepadButton(g, SDL_GAMEPAD_BUTTON_DPAD_RIGHT)) p.wButtons |= XINPUT_GAMEPAD_DPAD_RIGHT;
+    if (SDL_GetGamepadButton(g, SDL_GAMEPAD_BUTTON_START)) p.wButtons |= XINPUT_GAMEPAD_START;
+    if (SDL_GetGamepadButton(g, SDL_GAMEPAD_BUTTON_BACK)) p.wButtons |= XINPUT_GAMEPAD_BACK;
+    if (SDL_GetGamepadButton(g, SDL_GAMEPAD_BUTTON_TOUCHPAD)) p.wButtons |= XINPUT_GAMEPAD_BACK;
+    if (SDL_GetGamepadButton(g, SDL_GAMEPAD_BUTTON_LEFT_STICK)) p.wButtons |= XINPUT_GAMEPAD_LEFT_THUMB;
+    if (SDL_GetGamepadButton(g, SDL_GAMEPAD_BUTTON_RIGHT_STICK)) p.wButtons |= XINPUT_GAMEPAD_RIGHT_THUMB;
+    if (SDL_GetGamepadButton(g, SDL_GAMEPAD_BUTTON_LEFT_SHOULDER)) p.wButtons |= XINPUT_GAMEPAD_LEFT_SHOULDER;
+    if (SDL_GetGamepadButton(g, SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER)) p.wButtons |= XINPUT_GAMEPAD_RIGHT_SHOULDER;
+    if (SDL_GetGamepadButton(g, SDL_GAMEPAD_BUTTON_SOUTH)) p.wButtons |= XINPUT_GAMEPAD_A;
+    if (SDL_GetGamepadButton(g, SDL_GAMEPAD_BUTTON_EAST)) p.wButtons |= XINPUT_GAMEPAD_B;
+    if (SDL_GetGamepadButton(g, SDL_GAMEPAD_BUTTON_WEST)) p.wButtons |= XINPUT_GAMEPAD_X;
+    if (SDL_GetGamepadButton(g, SDL_GAMEPAD_BUTTON_NORTH)) p.wButtons |= XINPUT_GAMEPAD_Y;
+    p.bLeftTrigger = trigger(g, SDL_GAMEPAD_AXIS_LEFT_TRIGGER);
+    p.bRightTrigger = trigger(g, SDL_GAMEPAD_AXIS_RIGHT_TRIGGER);
+    p.sThumbLX = s16(SDL_GetGamepadAxis(g, SDL_GAMEPAD_AXIS_LEFTX));
+    p.sThumbLY = s16(SDL_GetGamepadAxis(g, SDL_GAMEPAD_AXIS_LEFTY));
+    p.sThumbRX = s16(SDL_GetGamepadAxis(g, SDL_GAMEPAD_AXIS_RIGHTX));
+    p.sThumbRY = s16(SDL_GetGamepadAxis(g, SDL_GAMEPAD_AXIS_RIGHTY));
+    Snapshot s;
+    s.index = int(o.id);
+    s.st.Gamepad = p;
+    g_snap.push_back(s);
+  }
+}
+
+}  // namespace
+
+bool get(int slot, XINPUT_STATE* out) {
+  ensure_sdl();
+  std::lock_guard lk(g_mu);
+  refresh();
+  if (slot < 0 || slot >= int(g_snap.size())) return false;
+  *out = g_snap[size_t(slot)].st;
+  return true;
+}
+
+void vibrate(int slot, u16 left, u16 right) {
+  ensure_sdl();
+  std::lock_guard lk(g_mu);
+  refresh();
+  if (slot < 0 || slot >= int(g_snap.size())) return;
+  for (Open& o : g_open) {
+    if (int(o.id) == g_snap[size_t(slot)].index && o.pad) {
+      SDL_RumbleGamepad(o.pad, left, right, 100);
+      return;
+    }
+  }
+}
+
+// Raw HID report parsing is Windows-specific (SDL parses reports for us on Linux); kept for the
+// shared unit tests' interface.
+bool parse_report(Model, bool, const u8*, size_t, XINPUT_GAMEPAD*) { return false; }
+
+}  // namespace rt::pads
+
+#endif
+

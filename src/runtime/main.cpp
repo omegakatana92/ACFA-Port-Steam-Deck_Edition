@@ -1,9 +1,5 @@
 // acfa: runtime host for the recompiled ARMORED CORE for Answer executable.
 //   acfa [--data <dir>] [--user <dir>] [--disc <dir>] [--flash <dir>] [--seconds N] [--fps N|display|uncapped] ...; options below
-#define WIN32_LEAN_AND_MEAN
-#include <windows.h>
-#include <psapi.h>
-
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -21,6 +17,7 @@
 #include "runtime/gpu/display.h"
 #include "runtime/gpu/shader_warm.h"
 #include "runtime/gpu/window.h"
+#include "runtime/platform.h"
 #include "runtime/rsx/rsx.h"
 #include "runtime/settings.h"
 #include "runtime/sysutil.h"
@@ -123,7 +120,7 @@ int main(int argc, char** argv) {
   // directory decides atomically which name is whose.
   std::time_t now = std::time(nullptr);
   std::tm tm{};
-  gmtime_s(&tm, &now);
+  platform::utc_tm(now, &tm);
   char stamp[32];
   std::strftime(stamp, sizeof stamp, "%Y%m%d-%H%M%S", &tm);
   fs::path run = data / "runs" / stamp;
@@ -185,10 +182,10 @@ int main(int argc, char** argv) {
   LOG_I("main", "ARMORED CORE for Answer PC port %s", ACFA_VERSION);
   LOG_I("main", "run dir %s", c.run_dir.c_str());
   if (c.affinity) {  // --affinity MASK (hex): fewer logical CPUs, to estimate smaller machines
-    if (SetProcessAffinityMask(GetCurrentProcess(), DWORD_PTR(c.affinity)))
+    if (platform::set_affinity_mask(c.affinity))
       LOG_I("main", "--affinity: limited to logical CPUs 0x%llx (%d of them)", c.affinity, __builtin_popcountll(c.affinity));
     else
-      LOG_W("main", "--affinity 0x%llx not applied (error %lu)", c.affinity, GetLastError());
+      LOG_W("main", "--affinity 0x%llx not applied", c.affinity);
   }
   if (c.warm_shaders) {  // pipeline step: shader cache from the manifest, no game run
     gpu::WarmResult w = gpu::warm_shaders(shader_manifest, c.disc_root, c.prepared);
@@ -209,8 +206,7 @@ int main(int argc, char** argv) {
   // the game's threads run when they become ready. Off by default: it takes CPU time from other
   // programs while the game runs.
   if (!c.priority.empty()) {
-    DWORD cls = c.priority == "high" ? HIGH_PRIORITY_CLASS : c.priority == "above-normal" ? ABOVE_NORMAL_PRIORITY_CLASS : 0;
-    if (cls && SetPriorityClass(GetCurrentProcess(), cls))
+    if (platform::set_process_priority(c.priority.c_str()))
       LOG_I("main", "process priority: %s", c.priority.c_str());
     else
       LOG_W("main", "--priority %s not applied (use above-normal or high)", c.priority.c_str());
@@ -279,7 +275,7 @@ int main(int argc, char** argv) {
     rsx::dump();
     dump_hle_stats();
     log_flush();
-    ExitProcess(0);
+    platform::exit_process(0);
   };
   // Watchdog: the time limit and log flushing keep working while the main thread is busy in a
   // modal system dialog (or stuck), so bounded runs stay bounded and keep their logs.
@@ -292,27 +288,20 @@ int main(int argc, char** argv) {
       if (now - last_fps_at >= 5) {  // displayed frame rate, for performance tracking
         u64 f = rsx::flips();
         std::string busy = "-";
-        PROCESS_MEMORY_COUNTERS pmc{};
-        GetProcessMemoryInfo(GetCurrentProcess(), &pmc, sizeof pmc);
-        static u64 last_faults = 0;
-        // Machine-wide CPU use next to ours: load from other programs shows up in measurements.
-        auto ft = [](const FILETIME& t) { return (u64(t.dwHighDateTime) << 32) | t.dwLowDateTime; };
-        FILETIME si, sk, su, pc, pe, pk, pu;
-        GetSystemTimes(&si, &sk, &su);
-        GetProcessTimes(GetCurrentProcess(), &pc, &pe, &pk, &pu);
-        static u64 last_idle = 0, last_total = 0, last_ours = 0;
-        u64 idle = ft(si), total = ft(sk) + ft(su), ours = ft(pk) + ft(pu);  // kernel time includes idle
+        platform::ProcessStats ps = platform::process_stats();
+        static u64 last_faults = 0, last_idle = 0, last_total = 0, last_ours = 0;
+        u64 idle = ps.system_idle_us, total = ps.system_total_us, ours = ps.cpu_user_us + ps.cpu_kernel_us;
         double sys_busy = total > last_total ? 100.0 * (1.0 - double(idle - last_idle) / double(total - last_total)) : 0;
         double our_share = total > last_total ? 100.0 * double(ours - last_ours) / double(total - last_total) : 0;
         if (last_fps_at > 0)
           LOG_I("perf", "%.1f frames/s; CPU: machine %.0f%%, this process %.0f%%; %.0f page faults/s, working set %llu MiB; "
                 "busiest threads: %s",
                 double(f - last_flips) / (now - last_fps_at), sys_busy, our_share,
-                double(pmc.PageFaultCount - last_faults) / (now - last_fps_at), (unsigned long long)(pmc.WorkingSetSize >> 20),
+                double(ps.page_faults - last_faults) / (now - last_fps_at), (unsigned long long)(ps.working_set >> 20),
                 busy.c_str());
         if (last_fps_at > 0) LOG_I("perf", "%s", audio_report().c_str());
         if (last_fps_at > 0 && !c.headless) LOG_I("perf", "%s", gpu::display::report().c_str());
-        last_faults = pmc.PageFaultCount;
+        last_faults = ps.page_faults;
         last_idle = idle;
         last_total = total;
         last_ours = ours;

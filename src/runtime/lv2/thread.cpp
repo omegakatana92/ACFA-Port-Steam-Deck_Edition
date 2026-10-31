@@ -1,30 +1,25 @@
 // LV2 PPU thread, time, timer and TTY syscalls.
-#define WIN32_LEAN_AND_MEAN
-#include <windows.h>
-
 #include <ctime>
 
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#endif
+
 #include "runtime/lv2/lv2.h"
+#include "runtime/platform.h"
 
 namespace rt::lv2 {
 
 u64 system_time_us() {
-  static LARGE_INTEGER f, t0;
-  static bool init = [] {
-    QueryPerformanceFrequency(&f);
-    QueryPerformanceCounter(&t0);
-    return true;
-  }();
-  (void)init;
-  LARGE_INTEGER n;
-  QueryPerformanceCounter(&n);
-  u64 d = u64(n.QuadPart - t0.QuadPart);
-  return (d / u64(f.QuadPart)) * 1000000ull + (d % u64(f.QuadPart)) * 1000000ull / u64(f.QuadPart);
+  static u64 t0 = platform::monotonic_us();
+  return platform::monotonic_us() - t0;
 }
 
-// High-resolution sleep (sys_timer_usleep): waitable timer per thread.
+// High-resolution sleep (sys_timer_usleep): waitable timer per thread on Windows.
 void sleep_us(u64 us) {
   note_block();
+#ifdef _WIN32
   thread_local HANDLE timer = CreateWaitableTimerExW(nullptr, nullptr, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_ALL_ACCESS);
   if (!us) {
     SwitchToThread();
@@ -38,13 +33,16 @@ void sleep_us(u64 us) {
   due.QuadPart = -s64(us * 10);  // 100 ns units, relative
   SetWaitableTimer(timer, &due, 0, nullptr, nullptr, FALSE);
   WaitForSingleObject(timer, INFINITE);
+#else
+  platform::sleep_us(us);
+#endif
 }
 
 namespace {
 
 void sys_ppu_thread_exit(u64 val) { thread_exit(val); }
 s32 sys_ppu_thread_yield() {
-  SwitchToThread();
+  platform::yield_cpu();
   return CELL_OK;
 }
 s32 sys_ppu_thread_join(u64 id, Ptr<be64> status) {
@@ -78,19 +76,17 @@ s32 sys_timer_sleep(u32 sec) {
 }
 
 s32 sys_time_get_timezone(Ptr<bes32> timezone, Ptr<bes32> summertime) {
-  TIME_ZONE_INFORMATION tzi{};
-  DWORD r = GetTimeZoneInformation(&tzi);
-  if (timezone) *timezone = -s32(tzi.Bias);
-  if (summertime) *summertime = r == TIME_ZONE_ID_DAYLIGHT ? -s32(tzi.DaylightBias) : 0;
+  bool daylight = false;
+  s32 offset_seconds = platform::utc_offset_seconds(&daylight);
+  // Same units as the Windows path: minutes west of UTC, and the daylight bias in minutes.
+  if (timezone) *timezone = -offset_seconds / 60;
+  if (summertime) *summertime = daylight ? 60 : 0;
   return CELL_OK;
 }
 s32 sys_time_get_current_time(Ptr<bes64> sec, Ptr<bes64> nsec) {
-  FILETIME ft;
-  GetSystemTimePreciseAsFileTime(&ft);
-  u64 t = (u64(ft.dwHighDateTime) << 32) | ft.dwLowDateTime;  // 100 ns since 1601
-  t -= 116444736000000000ull;                                 // -> since 1970
-  if (sec) *sec = s64(t / 10000000ull);
-  if (nsec) *nsec = s64((t % 10000000ull) * 100);
+  u64 t = platform::realtime_ns();
+  if (sec) *sec = s64(t / 1000000000ull);
+  if (nsec) *nsec = s64(t % 1000000000ull);
   return CELL_OK;
 }
 u64 sys_time_get_timebase_frequency() { return 79800000ull; }

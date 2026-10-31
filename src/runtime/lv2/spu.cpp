@@ -1,11 +1,15 @@
 // LV2 SPU syscalls: SPU thread groups, SPU threads, event connections
 // (local\research\spu_facts.md §7.6, §8, §9.4-§9.5).
+#include <cstring>
+#include <thread>
+
+#ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
-
-#include <cstring>
+#endif
 
 #include "runtime/config.h"
+#include "runtime/platform.h"
 #include "runtime/profiler.h"
 #include "runtime/lv2/lv2.h"
 #include "runtime/lv2/sync.h"
@@ -120,13 +124,22 @@ s32 sys_spu_thread_set_argument(u32 id, Ptr<ThreadArg> arg) {
   return CELL_OK;
 }
 
+#ifdef _WIN32
 DWORD WINAPI spu_host_thread(LPVOID p) {
+#else
+void spu_host_thread(void* p) {
+#endif
   auto* t = static_cast<spu::Thread*>(p);
+  platform::set_current_thread_name(("spu:" + t->name).c_str());
   for (;;) {
     {
       std::unique_lock lk(t->host_m);
       t->host_cv.wait(lk, [&] { return t->host_go || t->host_quit; });
+#ifdef _WIN32
       if (t->host_quit) return 0;
+#else
+      if (t->host_quit) return;
+#endif
       t->host_go = false;
     }
     spu::run_thread(*t);
@@ -167,9 +180,16 @@ void quit_host(spu::Thread& t) {
     t.host_quit = true;
   }
   t.host_cv.notify_all();
+#ifdef _WIN32
   WaitForSingleObject(static_cast<HANDLE>(t.host), INFINITE);
   CloseHandle(static_cast<HANDLE>(t.host));
   prof::unregister_thread(t.host);
+#else
+  auto* th = static_cast<std::thread*>(t.host);
+  if (th->joinable()) th->join();
+  delete th;
+  prof::unregister_thread(nullptr);
+#endif
   t.host = nullptr;
 }
 
@@ -213,12 +233,18 @@ s32 sys_spu_thread_group_start(u32 id) {
   for (auto& tp : g->threads) {
     spu::Thread& t = *tp;
     if (!t.host) {  // the first start: the host thread stays for later starts
+#ifdef _WIN32
       DWORD hid = 0;
       HANDLE h = CreateThread(nullptr, 16u << 20, spu_host_thread, &t, STACK_SIZE_PARAM_IS_A_RESERVATION, &hid);
       t.host = h;
       std::wstring wn(t.name.begin(), t.name.end());
       SetThreadDescription(h, (L"spu:" + wn).c_str());
       prof::register_thread("spu:" + t.name, h);
+#else
+      auto* th = new std::thread(spu_host_thread, &t);
+      t.host = th;
+      prof::register_thread("spu:" + t.name, nullptr);
+#endif
     }
     {
       std::lock_guard hl(t.host_m);
@@ -456,8 +482,12 @@ void spu_dump() {
             (unsigned long long)t->ch_reads, (unsigned long long)t->ch_writes, (unsigned long long)t->intr_events,
             (unsigned long long)t->stops,
             ch == ~0u ? "" : acfa::strprintf(", blocked on channel %u", ch).c_str());
+#ifdef _WIN32
       ULONG64 cycles = 0;
       if (t->host) QueryThreadCycleTime(static_cast<HANDLE>(t->host), &cycles);
+#else
+      u64 cycles = 0;  // per-thread cycle counters are not read on Linux yet
+#endif
       if (cycles)
         LOG_I("dump", "    host thread: %.2f G cycles, %.1f cycles per SPU instruction", double(cycles) / 1e9,
               double(cycles) / double(t->steps ? t->steps : 1));

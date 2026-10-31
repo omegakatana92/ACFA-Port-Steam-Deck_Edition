@@ -1,9 +1,7 @@
 // RSX command processor: FIFO fetch (jump/call/return), method register file, sync methods
 // (reference, semaphores, labels, reports), memory transfer engines, flips and vblank.
-#define WIN32_LEAN_AND_MEAN
-#include <windows.h>
-
 #include <atomic>
+#include <chrono>
 #include <deque>
 #include <mutex>
 #include <thread>
@@ -14,6 +12,7 @@
 #include "runtime/hle.h"
 #include "runtime/lv2/lv2.h"
 #include "runtime/memory.h"
+#include "runtime/platform.h"
 #include "runtime/ppu_thread.h"
 #include "runtime/rsx/methods.h"
 #include "runtime/rsx/rsx.h"
@@ -88,7 +87,7 @@ DisplayBuffer g_display[8];
 // The emulated vertical blank: from the display's own vblank when its refresh is a multiple of
 // about 60 Hz, else from a 60 Hz clock (gpu/display.h).
 void vblank_thread() {
-  SetThreadDescription(GetCurrentThread(), L"rsx-vblank");
+  platform::set_current_thread_name("rsx-vblank");
   for (;;) {
     gpu::display::wait_next_vblank();
     {
@@ -360,9 +359,8 @@ u32 fifo_read(u32 io) {
 }
 
 void fifo_thread() {
-  SetThreadDescription(GetCurrentThread(), L"rsx-fifo");
-  prof::register_thread("rsx-fifo", OpenThread(THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT | THREAD_QUERY_INFORMATION, FALSE,
-                                                 GetCurrentThreadId()));
+  platform::set_current_thread_name("rsx-fifo");
+  prof::register_thread("rsx-fifo", nullptr);
   renderer_thread_init();
   auto* ctrl_put = reinterpret_cast<volatile u32*>(ppu::mem() + kControlAddr);
   auto* ctrl_get = reinterpret_cast<volatile u32*>(ppu::mem() + kControlAddr + 4);
@@ -452,7 +450,13 @@ void fifo_thread() {
     g_ring_get.store(ring, std::memory_order_release);
     if (g_get_waiters.load(std::memory_order_acquire)) {
       u32 lo = g_get_wait_lo.load(std::memory_order_relaxed), hi = g_get_wait_hi.load(std::memory_order_relaxed);
-      if ((ring < lo || ring > hi) && (get < lo || get > hi)) WakeByAddressAll(&g_ring_get);
+      if ((ring < lo || ring > hi) && (get < lo || get > hi)) {
+#ifdef _WIN32
+        WakeByAddressAll(&g_ring_get);
+#else
+        platform::notify_all_atomic_u32(&g_ring_get);
+#endif
+      }
     }
   }
 }
@@ -476,7 +480,7 @@ void wait_get_outside(u32 lo, u32 hi) {
   };
   if (cfg().gcm_wait_spin) {  // --gcm-wait spin: a Sleep(0) loop (A/B comparisons)
     for (u32 spins = 0; !released(g_ring_get.load(std::memory_order_acquire)); ++spins)
-      if (spins > 64) Sleep(0);
+      if (spins > 64) platform::yield_cpu();
     return;
   }
   for (u32 spins = 0; spins < 64; ++spins) {
@@ -506,7 +510,11 @@ void wait_get_outside(u32 lo, u32 hi) {
         }
       }
     }
+#ifdef _WIN32
     WaitOnAddress(&g_ring_get, &seen, sizeof seen, 2);
+#else
+    platform::wait_atomic_u32(&g_ring_get, seen, 2);
+#endif
   }
   g_get_waiters.fetch_sub(1, std::memory_order_acq_rel);
 }

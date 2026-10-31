@@ -1,6 +1,8 @@
 // Host input state (keyboard and mouse from the window; gamepads are polled by the pad module).
+#ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#endif
 
 #include <atomic>
 
@@ -42,6 +44,7 @@ void input_focus(bool focused) {
 }
 void input_mouse_raw(u16 flags, s32 x, s32 y, u16 bf, u16 bd) {
   if (!g_captured || input_isolated()) return;
+#ifdef _WIN32
   if (flags & MOUSE_MOVE_ABSOLUTE) {
     // Normalized 0..65535 over the (virtual) screen: the difference, in screen pixels.
     bool virt = flags & MOUSE_VIRTUAL_DESKTOP;
@@ -66,6 +69,34 @@ void input_mouse_raw(u16 flags, s32 x, s32 y, u16 bf, u16 bd) {
   g_mouse_buttons = b;
   if (pressed) g_mouse_taps |= pressed;
   if (bf & RI_MOUSE_WHEEL) g_wheel += s16(bd);
+#else
+  (void)flags;
+  (void)bf;
+  (void)bd;
+  g_mouse_dx += x;
+  g_mouse_dy += y;
+#endif
+}
+
+void input_mouse_motion(s32 dx, s32 dy) {
+  if (!g_captured || input_isolated()) return;
+  g_mouse_dx += dx;
+  g_mouse_dy += dy;
+}
+
+void input_mouse_button_event(int button, bool down) {
+  if (!g_captured || input_isolated() || button < 0 || button >= 5) return;
+  if (down) {
+    g_mouse_buttons |= 1u << button;
+    g_mouse_taps |= 1u << button;
+  } else {
+    g_mouse_buttons &= ~(1u << button);
+  }
+}
+
+void input_mouse_wheel(s32 delta) {
+  if (!g_captured || input_isolated()) return;
+  g_wheel += delta;
 }
 void input_mouse_capture(bool captured) {
   g_captured = captured;

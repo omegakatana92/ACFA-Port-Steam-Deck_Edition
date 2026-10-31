@@ -20,6 +20,8 @@ bool window_is_fullscreen();
 // Client size in windowed mode (fitted to the monitor's work area, centred on it).
 void window_set_client_size(int w, int h);
 void window_client_size(int* w, int* h);
+// The mouse cursor in client pixels (false when it is outside the window or unavailable).
+bool window_cursor_position(int* x, int* y);
 // Work area of the monitor the window is on (the largest window that fits), and its full size.
 void window_work_area(int* w, int* h);
 void window_monitor_size(int* w, int* h);

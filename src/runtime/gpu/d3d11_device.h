@@ -1,7 +1,13 @@
 // Direct3D 11 device, swap chain and presentation (owned by the RSX FIFO thread).
+// On Linux the same interface is provided by the native graphics backend; the Windows build keeps
+// the Direct3D 11 implementation unchanged.
 #pragma once
+#ifdef _WIN32
 #include <d3d11.h>
 #include <dxgi1_2.h>
+#else
+#include <cstddef>
+#endif
 
 #include <functional>
 #include <string>
@@ -11,6 +17,7 @@
 
 namespace rt::gpu {
 
+#ifdef _WIN32
 struct Device {
   ID3D11Device* dev = nullptr;
   ID3D11DeviceContext* ctx = nullptr;
@@ -19,19 +26,31 @@ struct Device {
   u32 width = 1280, height = 720;
   bool no_overwrite_srv = false;  // D3D11.1: NO_OVERWRITE maps of dynamic buffers with shader resource views
 };
+#else
+// The Linux backend hides its Vulkan objects behind this handle.
+struct Device {
+  void* vk = nullptr;
+  u32 width = 1280, height = 720;
+};
+#endif
 Device& device();
 
 bool device_init(void* hwnd);  // hwnd may be null (headless: no swap chain)
-// Compiles HLSL with the OS d3dcompiler; returns nullptr and logs on failure.
 // Shader compilation statistics of this run.
 void shader_stats(u32* compiled, u32* cached, double* seconds);
+#ifdef _WIN32
+// Compiles HLSL with the OS d3dcompiler; returns nullptr and logs on failure.
 ID3DBlob* compile_hlsl(const std::string& src, const char* entry, const char* target);
 
 // Presents `srv` (any size) scaled to the window. `flip_y` for bottom-up sources.
 void present_texture(ID3D11ShaderResourceView* srv, u32 src_w, u32 src_h);
-// Exclusive fullscreen (DXGI) in a display mode of the window's output (0: the desktop's
+#else
+// Presents a CPU image (RGBA8) scaled to the window (the backend's upload path).
+void present_rgba(const u8* rgba, u32 src_w, u32 src_h);
+#endif
+// Exclusive fullscreen in a display mode of the window's output (0: the desktop's
 // resolution / refresh rate). Carried out by the presenting thread before its next present;
-// re-entered when the window is in front again after DXGI left it (Alt+Tab).
+// re-entered when the window is in front again after leaving it (Alt+Tab).
 void request_exclusive(bool on, u32 w = 0, u32 h = 0, u32 hz = 0);
 bool exclusive_active();
 // Copies the last presented frame to CPU memory (RGBA8) for captures (waits for the GPU).
@@ -41,7 +60,9 @@ bool read_back_last_frame(std::vector<u8>& rgba, u32& w, u32& h);
 // passes their pixels to `done` (RGBA8, tightly packed).
 void begin_capture(u32 index);
 void poll_captures(const std::function<void(u32 index, std::vector<u8>&& rgba, u32 w, u32 h)>& done);
+#ifdef _WIN32
 // Copies level 0 of a 4-byte-per-pixel texture to CPU memory (diagnostics).
 bool read_back_texture(ID3D11Texture2D* tex, std::vector<u8>& rgba, u32& w, u32& h);
+#endif
 
 }  // namespace rt::gpu

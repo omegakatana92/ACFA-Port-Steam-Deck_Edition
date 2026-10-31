@@ -4,13 +4,10 @@
 // them alike. Cross is A, Circle B, Square X, Triangle Y, L1 / R1 the shoulders, L2 / R2 the
 // triggers (analog), Options START, Share / Create and the touchpad click BACK (the PS3's SELECT).
 #pragma once
-#define WIN32_LEAN_AND_MEAN
-#include <windows.h>
-#include <xinput.h>
-
 #include <cstddef>
 
 #include "common/bytes.h"
+#include "runtime/pad_state.h"
 
 namespace rt::pads {
 
@@ -21,7 +18,7 @@ constexpr int kSlots = 4;
 // Callers check input_isolated() themselves.
 bool get(int slot, XINPUT_STATE* out);
 // Vibration of the controller in `slot` (XInput's motor speeds; PlayStation controllers: none yet).
-void vibrate(int slot, WORD left, WORD right);
+void vibrate(int slot, u16 left, u16 right);
 
 // One input report of a PlayStation controller (report id first) in XInput's layout; false when
 // it is not a state report.

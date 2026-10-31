@@ -548,6 +548,13 @@ void window_client_size(int* w, int* h) {
   *w = rc.right;
   *h = rc.bottom;
 }
+bool window_cursor_position(int* x, int* y) {
+  POINT p{};
+  if (!g_hwnd || !GetCursorPos(&p) || !ScreenToClient(g_hwnd, &p)) return false;
+  *x = p.x;
+  *y = p.y;
+  return true;
+}
 void window_work_area(int* w, int* h) {
   *w = *h = 0;
   if (g_hwnd) work_area(w, h);

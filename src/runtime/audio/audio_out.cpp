@@ -1,17 +1,23 @@
 #include "runtime/audio/audio_out.h"
 
+#include <cstring>
+#include <mutex>
+
+#include "runtime/log.h"
+
+#ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <audioclient.h>
 #include <mmdeviceapi.h>
-
-#include <cstring>
-
-#include "runtime/log.h"
+#else
+#include <SDL3/SDL.h>
+#endif
 
 namespace rt::audio {
 namespace {
 
+#ifdef _WIN32
 // KSDATAFORMAT_SUBTYPE_IEEE_FLOAT
 const GUID kFloatSubtype = {0x00000003, 0x0000, 0x0010, {0x80, 0x00, 0x00, 0xaa, 0x00, 0x38, 0x9b, 0x71}};
 
@@ -19,10 +25,21 @@ IAudioClient* g_client = nullptr;
 IAudioRenderClient* g_render = nullptr;
 UINT32 g_buffer_frames = 0;
 bool g_ok = false;
+#else
+// SDL3 pulls from an audio stream; the runtime pushes the same 48 kHz float stereo frames the
+// Windows/WASAPI path does. The stream's queue replaces the WASAPI device buffer.
+constexpr u32 kBufferFrames = 4800;  // 100 ms
+SDL_AudioStream* g_stream = nullptr;
+std::mutex g_mu;
+bool g_ok = false;
+
+void sdl_audio_callback(void*, SDL_AudioStream*, int, int) {}  // pull model: no callback work
+#endif
 
 }  // namespace
 
 bool out_init() {
+#ifdef _WIN32
   HRESULT hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
   (void)hr;
   IMMDeviceEnumerator* en = nullptr;
@@ -68,19 +85,45 @@ bool out_init() {
   g_ok = true;
   LOG_I("audio", "WASAPI output: 48 kHz float stereo, device buffer %u frames", g_buffer_frames);
   return true;
+#else
+  if (!SDL_InitSubSystem(SDL_INIT_AUDIO)) {
+    LOG_W("audio", "SDL audio init failed (%s); audio output disabled", SDL_GetError());
+    return false;
+  }
+  SDL_AudioSpec spec{};
+  spec.format = SDL_AUDIO_F32;
+  spec.channels = 2;
+  spec.freq = 48000;
+  g_stream = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec, sdl_audio_callback, nullptr);
+  if (!g_stream) {
+    LOG_W("audio", "no audio playback device (%s); audio output disabled", SDL_GetError());
+    return false;
+  }
+  SDL_ResumeAudioStreamDevice(g_stream);
+  g_ok = true;
+  LOG_I("audio", "SDL3 output: 48 kHz float stereo, stream buffer %u frames", kBufferFrames);
+  return true;
+#endif
 }
 
 bool out_available() { return g_ok; }
 
 u32 out_queued_frames() {
   if (!g_ok) return 0;
+#ifdef _WIN32
   UINT32 pad = 0;
   g_client->GetCurrentPadding(&pad);
   return pad;
+#else
+  std::lock_guard lk(g_mu);
+  int queued = SDL_GetAudioStreamQueued(g_stream);  // bytes
+  return queued > 0 ? u32(queued / 8) : 0;
+#endif
 }
 
 void out_write(const float* stereo, u32 frames) {
   if (!g_ok) return;
+#ifdef _WIN32
   UINT32 pad = 0;
   g_client->GetCurrentPadding(&pad);
   if (pad + frames > g_buffer_frames) return;  // device full: drop (should not happen with pacing)
@@ -88,6 +131,13 @@ void out_write(const float* stereo, u32 frames) {
   if (FAILED(g_render->GetBuffer(frames, &p))) return;
   std::memcpy(p, stereo, size_t(frames) * 8);
   g_render->ReleaseBuffer(frames, 0);
+#else
+  std::lock_guard lk(g_mu);
+  int queued = SDL_GetAudioStreamQueued(g_stream);
+  if (queued > 0 && u32(queued / 8) + frames > kBufferFrames) return;  // stream full: drop
+  SDL_PutAudioStreamData(g_stream, stereo, int(size_t(frames) * 8));
+#endif
 }
 
 }  // namespace rt::audio
+

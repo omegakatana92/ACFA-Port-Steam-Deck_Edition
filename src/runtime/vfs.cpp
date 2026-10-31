@@ -1,11 +1,22 @@
 #include "runtime/vfs.h"
 
+#ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#else
+#include <cerrno>
+#include <cstring>
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#endif
 
 #include <map>
 #include <memory>
 #include <mutex>
+
+#include <algorithm>
+#include <cctype>
 
 #include "common/file.h"
 #include "runtime/hle.h"
@@ -24,7 +35,11 @@ struct Mount {
 std::vector<Mount> g_mounts;
 
 struct File {
+#ifdef _WIN32
   HANDLE h = INVALID_HANDLE_VALUE;
+#else
+  int h = -1;
+#endif
   std::string path;
   bool dir = false;
   std::vector<std::pair<u8, std::string>> entries;
@@ -42,6 +57,18 @@ std::shared_ptr<File> get(u32 fd) {
   return it == g_files.end() ? nullptr : it->second;
 }
 
+// Mount prefixes are matched case-insensitively (the guest ABI is Windows-like here) without
+// depending on the host C library's _stricmp/strcasecmp spelling.
+bool equal_ci(const std::string& a, const std::string& b) {
+  if (a.size() != b.size()) return false;
+  for (size_t i = 0; i < a.size(); ++i) {
+    unsigned char ca = static_cast<unsigned char>(a[i]), cb = static_cast<unsigned char>(b[i]);
+    if (std::tolower(ca) != std::tolower(cb)) return false;
+  }
+  return true;
+}
+
+#ifdef _WIN32
 s64 ft_to_unix(const FILETIME& ft) {
   u64 t = (u64(ft.dwHighDateTime) << 32) | ft.dwLowDateTime;
   return t ? s64((t - 116444736000000000ull) / 10000000ull) : 0;
@@ -61,6 +88,25 @@ s32 win_err(DWORD e) {
     default: return CELL_EIO;
   }
 }
+#else
+s32 posix_err(int e) {
+  switch (e) {
+    case ENOENT:
+    case ENOTDIR: return CELL_ENOENT;
+    case EACCES:
+    case EPERM: return CELL_EACCES;
+    case EEXIST: return CELL_EEXIST;
+    case ENOTEMPTY: return CELL_ENOTEMPTY;
+    case ENOSPC: return CELL_ENOSPC;
+    case EBUSY: return CELL_EBUSY;
+    case EISDIR: return CELL_EISDIR;
+    case EINVAL: return CELL_EINVAL;
+    case EMFILE:
+    case ENFILE: return CELL_EMFILE;
+    default: return CELL_EIO;
+  }
+}
+#endif
 
 }  // namespace
 
@@ -109,7 +155,7 @@ bool resolve(const std::string& gp, Resolved& out) {
   for (const auto& m : g_mounts) {
     if (m.parts.size() > parts.size() || (best && m.parts.size() <= best->parts.size())) continue;
     bool match = true;
-    for (size_t k = 0; k < m.parts.size() && match; ++k) match = _stricmp(m.parts[k].c_str(), parts[k].c_str()) == 0;
+    for (size_t k = 0; k < m.parts.size() && match; ++k) match = equal_ci(m.parts[k], parts[k]);
     if (match) best = &m;
   }
   if (!best) return false;
@@ -144,6 +190,10 @@ s32 open(const std::string& path, s32 flags, u32* fd) {
     LOG_D("vfs", "open('%s', 0x%x) -> 0x%x (resolve)", path.c_str(), flags, u32(e));
     return e;
   }
+  std::error_code ec;
+  if (fs::is_directory(r.host, ec)) return CELL_EISDIR;
+  auto f = std::make_shared<File>();
+#ifdef _WIN32
   DWORD access = GENERIC_READ;
   if ((flags & ACC) == WR) access = GENERIC_WRITE;
   if ((flags & ACC) == RDWR) access = GENERIC_READ | GENERIC_WRITE;
@@ -152,8 +202,6 @@ s32 open(const std::string& path, s32 flags, u32* fd) {
   else if ((flags & CREAT) && (flags & TRUNC)) disp = CREATE_ALWAYS;
   else if (flags & CREAT) disp = OPEN_ALWAYS;
   else if (flags & TRUNC) disp = TRUNCATE_EXISTING;
-  std::error_code ec;
-  if (fs::is_directory(r.host, ec)) return CELL_EISDIR;
   HANDLE h = CreateFileW(r.host.wstring().c_str(), access, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, disp,
                          FILE_ATTRIBUTE_NORMAL, nullptr);
   if (h == INVALID_HANDLE_VALUE) {
@@ -161,8 +209,21 @@ s32 open(const std::string& path, s32 flags, u32* fd) {
     LOG_D("vfs", "open('%s', 0x%x) -> 0x%x", path.c_str(), flags, u32(err));
     return err;
   }
-  auto f = std::make_shared<File>();
   f->h = h;
+#else
+  int access = ((flags & ACC) == WR) ? O_WRONLY : ((flags & ACC) == RDWR) ? O_RDWR : O_RDONLY;
+  if (flags & CREAT) access |= O_CREAT;
+  if (flags & EXCL) access |= O_EXCL;
+  if (flags & TRUNC) access |= O_TRUNC;
+  if (flags & APPEND) access |= O_APPEND;
+  int h = ::open(r.host.c_str(), access, 0644);
+  if (h < 0) {
+    s32 err = posix_err(errno);
+    LOG_D("vfs", "open('%s', 0x%x) -> 0x%x (%s)", path.c_str(), flags, u32(err), std::strerror(errno));
+    return err;
+  }
+  f->h = h;
+#endif
   f->path = path;
   f->append = flags & APPEND;
   std::lock_guard lk(g_mu);
@@ -181,8 +242,13 @@ s32 close(u32 fd) {
     f = it->second;
     g_files.erase(it);
   }
+#ifdef _WIN32
   CloseHandle(f->h);
   return CELL_OK;
+#else
+  ::close(f->h);
+  return CELL_OK;
+#endif
 }
 
 s32 read(u32 fd, void* buf, u64 n, u64* done) {
@@ -190,12 +256,24 @@ s32 read(u32 fd, void* buf, u64 n, u64* done) {
   if (!f || f->dir) return CELL_EBADF;
   std::lock_guard lk(f->m);
   u64 total = 0;
+#ifdef _WIN32
   while (total < n) {
     DWORD chunk = DWORD(std::min<u64>(n - total, 1u << 30)), got = 0;
     if (!ReadFile(f->h, static_cast<u8*>(buf) + total, chunk, &got, nullptr)) return CELL_EIO;
     total += got;
     if (got < chunk) break;
   }
+#else
+  while (total < n) {
+    ssize_t got = ::read(f->h, static_cast<u8*>(buf) + total, size_t(std::min<u64>(n - total, 1u << 30)));
+    if (got < 0) {
+      if (errno == EINTR) continue;
+      return posix_err(errno);
+    }
+    total += u64(got);
+    if (got == 0) break;
+  }
+#endif
   if (done) *done = total;
   return CELL_OK;
 }
@@ -206,6 +284,7 @@ s32 pread(u32 fd, u64 offset, void* buf, u64 n, u64* done) {
   auto f = get(fd);
   if (!f || f->dir) return CELL_EBADF;
   std::lock_guard lk(f->m);
+#ifdef _WIN32
   LARGE_INTEGER cur{};
   SetFilePointerEx(f->h, LARGE_INTEGER{}, &cur, FILE_CURRENT);
   OVERLAPPED ov{};
@@ -217,6 +296,11 @@ s32 pread(u32 fd, u64 offset, void* buf, u64 n, u64* done) {
   SetFilePointerEx(f->h, cur, nullptr, FILE_BEGIN);
   if (!ok && e != ERROR_HANDLE_EOF) return CELL_EIO;
   if (done) *done = got;
+#else
+  ssize_t got = ::pread(f->h, buf, size_t(std::min<u64>(n, 1u << 30)), off_t(offset));
+  if (got < 0) return posix_err(errno);
+  if (done) *done = u64(got);
+#endif
   return CELL_OK;
 }
 
@@ -224,6 +308,7 @@ s32 pwrite(u32 fd, u64 offset, const void* buf, u64 n, u64* done) {
   auto f = get(fd);
   if (!f || f->dir) return CELL_EBADF;
   std::lock_guard lk(f->m);
+#ifdef _WIN32
   LARGE_INTEGER cur{};
   SetFilePointerEx(f->h, LARGE_INTEGER{}, &cur, FILE_CURRENT);
   OVERLAPPED ov{};
@@ -235,6 +320,11 @@ s32 pwrite(u32 fd, u64 offset, const void* buf, u64 n, u64* done) {
   SetFilePointerEx(f->h, cur, nullptr, FILE_BEGIN);
   if (!ok) return win_err(e);
   if (done) *done = wrote;
+#else
+  ssize_t wrote = ::pwrite(f->h, buf, size_t(std::min<u64>(n, 1u << 30)), off_t(offset));
+  if (wrote < 0) return posix_err(errno);
+  if (done) *done = u64(wrote);
+#endif
   return CELL_OK;
 }
 
@@ -242,10 +332,17 @@ s32 write(u32 fd, const void* buf, u64 n, u64* done) {
   auto f = get(fd);
   if (!f || f->dir) return CELL_EBADF;
   std::lock_guard lk(f->m);
+#ifdef _WIN32
   if (f->append) SetFilePointerEx(f->h, LARGE_INTEGER{}, nullptr, FILE_END);
   DWORD wrote = 0;
   if (!WriteFile(f->h, buf, DWORD(n), &wrote, nullptr)) return win_err(GetLastError());
   if (done) *done = wrote;
+#else
+  if (f->append) ::lseek(f->h, 0, SEEK_END);
+  ssize_t wrote = ::write(f->h, buf, size_t(n));
+  if (wrote < 0) return posix_err(errno);
+  if (done) *done = u64(wrote);
+#endif
   return CELL_OK;
 }
 
@@ -253,13 +350,20 @@ s32 lseek(u32 fd, s64 off, s32 whence, u64* pos) {
   auto f = get(fd);
   if (!f || f->dir) return CELL_EBADF;
   if (whence < 0 || whence > 2) return CELL_EINVAL;
+#ifdef _WIN32
   LARGE_INTEGER li, np;
   li.QuadPart = off;
   if (!SetFilePointerEx(f->h, li, &np, DWORD(whence))) return CELL_EINVAL;
   if (pos) *pos = u64(np.QuadPart);
+#else
+  off_t np = ::lseek(f->h, off_t(off), whence);
+  if (np < 0) return CELL_EINVAL;
+  if (pos) *pos = u64(np);
+#endif
   return CELL_OK;
 }
 
+#ifdef _WIN32
 static void fill_stat(const WIN32_FILE_ATTRIBUTE_DATA& a, Stat* st) {
   st->is_dir = a.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY;
   st->size = st->is_dir ? 0 : (u64(a.nFileSizeHigh) << 32) | a.nFileSizeLow;
@@ -268,16 +372,32 @@ static void fill_stat(const WIN32_FILE_ATTRIBUTE_DATA& a, Stat* st) {
   st->ctime = ft_to_unix(a.ftCreationTime);
   st->readonly = a.dwFileAttributes & FILE_ATTRIBUTE_READONLY;
 }
+#else
+static void fill_stat(const struct stat& a, Stat* st) {
+  st->is_dir = S_ISDIR(a.st_mode);
+  st->size = st->is_dir ? 0 : u64(a.st_size);
+  st->atime = s64(a.st_atime);
+  st->mtime = s64(a.st_mtime);
+  st->ctime = s64(a.st_ctime);
+  st->readonly = (a.st_mode & S_IWUSR) == 0;
+}
+#endif
 
 s32 fstat(u32 fd, Stat* st) {
   auto f = get(fd);
   if (!f) return CELL_EBADF;
   if (f->dir) return stat(f->path, st);
+#ifdef _WIN32
   BY_HANDLE_FILE_INFORMATION bi{};
   if (!GetFileInformationByHandle(f->h, &bi)) return CELL_EIO;
   WIN32_FILE_ATTRIBUTE_DATA a{bi.dwFileAttributes, bi.ftCreationTime, bi.ftLastAccessTime, bi.ftLastWriteTime, bi.nFileSizeHigh,
                               bi.nFileSizeLow};
   fill_stat(a, st);
+#else
+  struct stat a{};
+  if (::fstat(f->h, &a) != 0) return posix_err(errno);
+  fill_stat(a, st);
+#endif
   return CELL_OK;
 }
 
@@ -287,9 +407,16 @@ s32 stat(const std::string& path, Stat* st) {
     // The mount points themselves exist.
     return CELL_ENOENT;
   }
+#ifdef _WIN32
   WIN32_FILE_ATTRIBUTE_DATA a{};
   if (!GetFileAttributesExW(r.host.wstring().c_str(), GetFileExInfoStandard, &a)) return win_err(GetLastError());
   fill_stat(a, st);
+#else
+  struct stat a{};
+  if (::stat(r.host.c_str(), &a) != 0) return posix_err(errno);
+  fill_stat(a, st);
+  st->readonly = st->readonly || !r.writable;
+#endif
   if (!r.writable) st->readonly = true;
   return CELL_OK;
 }
@@ -298,9 +425,13 @@ s32 ftruncate(u32 fd, u64 size) {
   auto f = get(fd);
   if (!f || f->dir) return CELL_EBADF;
   std::lock_guard lk(f->m);
+#ifdef _WIN32
   FILE_END_OF_FILE_INFO eof{};
   eof.EndOfFile.QuadPart = s64(size);
   if (!SetFileInformationByHandle(f->h, FileEndOfFileInfo, &eof, sizeof eof)) return win_err(GetLastError());
+#else
+  if (::ftruncate(f->h, off_t(size)) != 0) return posix_err(errno);
+#endif
   return CELL_OK;
 }
 
@@ -373,7 +504,11 @@ s32 rmdir(const std::string& path) {
   Resolved r;
   s32 e = resolve_for(path, true, r);
   if (e != CELL_OK) return e;
+#ifdef _WIN32
   if (!RemoveDirectoryW(r.host.wstring().c_str())) return win_err(GetLastError());
+#else
+  if (::rmdir(r.host.c_str()) != 0) return posix_err(errno);
+#endif
   return CELL_OK;
 }
 
@@ -383,7 +518,11 @@ s32 unlink(const std::string& path) {
   if (e != CELL_OK) return e;
   std::error_code ec;
   if (fs::is_directory(r.host, ec)) return CELL_EISDIR;
+#ifdef _WIN32
   if (!DeleteFileW(r.host.wstring().c_str())) return win_err(GetLastError());
+#else
+  if (::unlink(r.host.c_str()) != 0) return posix_err(errno);
+#endif
   return CELL_OK;
 }
 
@@ -393,7 +532,11 @@ s32 rename(const std::string& from, const std::string& to) {
   if (e != CELL_OK) return e;
   e = resolve_for(to, true, b);
   if (e != CELL_OK) return e;
+#ifdef _WIN32
   if (!MoveFileExW(a.host.wstring().c_str(), b.host.wstring().c_str(), MOVEFILE_REPLACE_EXISTING)) return win_err(GetLastError());
+#else
+  if (::rename(a.host.c_str(), b.host.c_str()) != 0) return posix_err(errno);
+#endif
   return CELL_OK;
 }
 

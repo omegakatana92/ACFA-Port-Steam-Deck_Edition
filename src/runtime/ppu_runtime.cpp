@@ -1,15 +1,27 @@
 #include "runtime/ppu_runtime.h"
 
+#include <algorithm>
+#include <cstdio>
+#include <cstring>
+#include <mutex>
+
+#ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
-
-#include <algorithm>
-#include <mutex>
+#else
+#include <ctime>
+#include <linux/futex.h>
+#include <signal.h>
+#include <sys/syscall.h>
+#include <ucontext.h>
+#include <unistd.h>
+#endif
 
 #include "common/file.h"
 #include "runtime/config.h"
 #include "runtime/log.h"
 #include "runtime/memory.h"
+#include "runtime/platform.h"
 #include "runtime/ppu_thread.h"
 #include "runtime/reservation.h"
 
@@ -29,22 +41,20 @@ std::atomic<u32> g_seq{0}, g_waiters{0};
 
 void notify_slow() {
   g_seq.fetch_add(1, std::memory_order_seq_cst);
+#ifdef _WIN32
   WakeByAddressAll(&g_seq);
+#else
+  syscall(SYS_futex, reinterpret_cast<u32*>(&g_seq), FUTEX_WAKE_PRIVATE, INT_MAX, nullptr, nullptr, 0);
+#endif
 }
 
 u32 host_processors() {
   static std::atomic<u32> count{0};
   static std::atomic<u64> next_ms{0};
-  u64 now = GetTickCount64();
+  u64 now = platform::tick_ms();
   if (now >= next_ms.load(std::memory_order_relaxed)) {
     next_ms.store(now + 1000, std::memory_order_relaxed);
-    DWORD_PTR mask = 0, sys = 0;
-    u32 n = GetProcessAffinityMask(GetCurrentProcess(), &mask, &sys) ? u32(__builtin_popcountll(u64(mask))) : 0;
-    if (!n) {
-      SYSTEM_INFO si;
-      GetSystemInfo(&si);
-      n = si.dwNumberOfProcessors;
-    }
+    u32 n = platform::cpu_count();
     count.store(n ? n : 1, std::memory_order_relaxed);
   }
   return count.load(std::memory_order_relaxed);
@@ -129,11 +139,20 @@ void watch_dump(const std::string& path) {
 void wait(u32 seq, u64 timeout_us) {
   if (g_seq.load(std::memory_order_seq_cst) != seq) return;
   if (timeout_us < 1000) {  // below the wait granularity: yield instead
-    SwitchToThread();
+    platform::yield_cpu();
     return;
   }
+#ifdef _WIN32
   u32 expected = seq;
   WaitOnAddress(&g_seq, &expected, sizeof(expected), DWORD(std::min<u64>(timeout_us / 1000, 100)));
+#else
+  timespec ts;
+  clock_gettime(CLOCK_MONOTONIC, &ts);
+  u64 us = u64(ts.tv_nsec) / 1000 + std::min<u64>(timeout_us, 100000);
+  ts.tv_sec += time_t(us / 1000000);
+  ts.tv_nsec = long(us % 1000000) * 1000;
+  syscall(SYS_futex, reinterpret_cast<u32*>(&g_seq), FUTEX_WAIT_PRIVATE, seq, &ts, nullptr, 0);
+#endif
 }
 }  // namespace res
 namespace {
@@ -143,7 +162,7 @@ ppu::Fn* g_tab = nullptr;
 std::vector<HleImport> g_imports;
 std::mutex g_imp_mu;
 std::vector<std::pair<uintptr_t, u32>> g_host_sorted;  // host fn address -> guest address
-LARGE_INTEGER g_qpf, g_qpc0;
+u64 g_time0_us = 0;
 
 void dump_ctx(const ppu::Ctx& c, std::string& s) {
   for (int i = 0; i < 32; i += 4)
@@ -158,6 +177,38 @@ std::string thread_desc() {
   return t ? acfa::strprintf("thread 0x%x '%s'", t->id, t->name.c_str()) : std::string("non-guest thread");
 }
 
+#ifndef _WIN32
+void posix_fault_handler(int sig, siginfo_t* si, void* vctx) {
+  auto* uc = static_cast<ucontext_t*>(vctx);
+  u64 rip = u64(uc->uc_mcontext.gregs[REG_RIP]);
+  const char* what = sig == SIGSEGV ? "SIGSEGV" : sig == SIGBUS ? "SIGBUS" : sig == SIGILL ? "SIGILL" : "SIGFPE";
+  char buf[1200];
+  int n = std::snprintf(buf, sizeof buf, "fatal: host %s at rip 0x%llx in %s", what, (unsigned long long)rip,
+                        thread_desc().c_str());
+  if (sig == SIGSEGV && si) {
+    u64 a = u64(reinterpret_cast<uintptr_t>(si->si_addr));
+    u64 b = u64(PPU_MEM_BASE);
+    if (a >= b && a < b + 0x100000000ull)
+      n += std::snprintf(buf + n, sizeof buf - size_t(n), "\n  guest access at 0x%08x",
+                         u32(a - b));
+    else
+      n += std::snprintf(buf + n, sizeof buf - size_t(n), "\n  host access at 0x%llx", (unsigned long long)a);
+  }
+  if (!g_host_sorted.empty()) {
+    auto it = std::upper_bound(g_host_sorted.begin(), g_host_sorted.end(), std::make_pair(uintptr_t(rip), ~0u));
+    if (it != g_host_sorted.begin()) {
+      --it;
+      n += std::snprintf(buf + n, sizeof buf - size_t(n), "\n  in recompiled f_%08x (+0x%llx host bytes)", it->second,
+                         (unsigned long long)(rip - it->first));
+    }
+  }
+  n += std::snprintf(buf + n, sizeof buf - size_t(n), "\n");
+  if (n > int(sizeof buf)) n = int(sizeof buf);
+  ssize_t ignored = write(2, buf, size_t(n));
+  (void)ignored;
+  platform::exit_process(3);
+}
+#else
 LONG CALLBACK fault_handler(PEXCEPTION_POINTERS ep) {
   DWORD code = ep->ExceptionRecord->ExceptionCode;
   if (code != EXCEPTION_ACCESS_VIOLATION && code != EXCEPTION_ILLEGAL_INSTRUCTION && code != EXCEPTION_STACK_OVERFLOW &&
@@ -205,14 +256,14 @@ LONG CALLBACK fault_handler(PEXCEPTION_POINTERS ep) {
   }
   fatal(s);
 }
+#endif
 
 }  // namespace
 
 void ppu_runtime_init() {
   // HLE area for fake import descriptors (must exist before any module binds imports).
   if (!vm::alloc_fixed(vm::Area::Main, kHleCodeBase, kHleAreaEnd - kHleCodeBase)) fatal("cannot map HLE area");
-  QueryPerformanceFrequency(&g_qpf);
-  QueryPerformanceCounter(&g_qpc0);
+  g_time0_us = platform::monotonic_us();
   u32 lo = ~0u, hi = 0;
   for (size_t i = 0; i < ppu::g_func_count; ++i) {
     lo = std::min(lo, ppu::g_funcs[i].addr);
@@ -221,7 +272,7 @@ void ppu_runtime_init() {
   g_tab_base = lo;
   g_tab_end = hi + 4;
   size_t n = (g_tab_end - g_tab_base) / 4;
-  g_tab = static_cast<ppu::Fn*>(VirtualAlloc(nullptr, n * sizeof(ppu::Fn), MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE));
+  g_tab = static_cast<ppu::Fn*>(platform::alloc_rw(n * sizeof(ppu::Fn)));
   if (!g_tab) fatal("cannot allocate function table");
   g_host_sorted.reserve(ppu::g_func_count);
   for (size_t i = 0; i < ppu::g_func_count; ++i) {
@@ -286,7 +337,23 @@ void dump_hle_stats() {
   LOG_I("hle", "%s", s.c_str());
 }
 
-void install_fault_handler() { AddVectoredExceptionHandler(1, fault_handler); }
+void install_fault_handler() {
+#ifdef _WIN32
+  AddVectoredExceptionHandler(1, fault_handler);
+#else
+  static u8 altstack[64 * 1024];
+  stack_t ss{};
+  ss.ss_sp = altstack;
+  ss.ss_size = sizeof altstack;
+  ss.ss_flags = 0;
+  sigaltstack(&ss, nullptr);
+  struct sigaction sa{};
+  sa.sa_sigaction = posix_fault_handler;
+  sa.sa_flags = SA_SIGINFO | SA_ONSTACK;
+  sigemptyset(&sa.sa_mask);
+  for (int sig : {SIGSEGV, SIGBUS, SIGILL, SIGFPE}) sigaction(sig, &sa, nullptr);
+#endif
+}
 
 }  // namespace rt
 
@@ -390,11 +457,8 @@ void bad_switch(Ctx& ctx, u32 pc, u32 target) {
 
 u64 timebase() {
   // Cell timebase runs at 79.8 MHz.
-  LARGE_INTEGER now;
-  QueryPerformanceCounter(&now);
-  u64 ticks = u64(now.QuadPart - g_qpc0.QuadPart);
-  u64 q = u64(g_qpf.QuadPart);
-  return (ticks / q) * 79800000ull + (ticks % q) * 79800000ull / q;
+  u64 us = platform::monotonic_us() - g_time0_us;
+  return (us / 1000000ull) * 79800000ull + (us % 1000000ull) * 79800000ull / 1000000ull;
 }
 
 u64 read_spr(Ctx& ctx, u32 pc, u32 spr) {

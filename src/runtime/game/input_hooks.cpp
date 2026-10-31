@@ -1,7 +1,4 @@
 // Hooks on the game's input code (listed in hooks.txt; facts in docs/GAME_NOTES.md).
-#define WIN32_LEAN_AND_MEAN
-#include <windows.h>
-
 #include <algorithm>
 #include <atomic>
 #include <cmath>
@@ -14,6 +11,7 @@
 #include "runtime/bindings.h"
 #include "runtime/input.h"
 #include "runtime/log.h"
+#include "runtime/platform.h"
 #include "runtime/game/frame_policy.h"
 #include "runtime/game/key_assign.h"
 #include "runtime/game/menu_mouse.h"
@@ -132,7 +130,7 @@ struct MouseCam {
 MouseCam g_cam;
 double g_full[2] = {0, 0};              // the stick's full turn rate for -1 / +1 (radians per step; 0: not known)
 double g_turn_drag = 0;                 // the share of the yaw rate the drag takes off per step (0: not known)
-LARGE_INTEGER g_last_frame{};           // the previous mouse camera frame
+u64 g_last_frame = 0;           // the previous mouse camera frame (monotonic microseconds)
 std::atomic<u32> g_turn_input{0};       // last player turn view seen (diagnostics)
 std::atomic<u32> g_player_state{0};     // the player's virtual pad state (written through the view)
 std::atomic<u32> g_look{0};             // the player AC's look control object
@@ -182,10 +180,8 @@ double heading_of(u32 body) { return std::atan2(double(rf(body + kBodyRow2)), do
 // update and the look control): the mouse movement since the previous frame turns and pitches the
 // camera. After a longer gap (menus, a pause, a hitch) nothing gathered meanwhile moves it.
 void mouse_look_frame(u32 view) {
-  LARGE_INTEGER now, freq;
-  QueryPerformanceCounter(&now);
-  QueryPerformanceFrequency(&freq);
-  double dt = g_last_frame.QuadPart ? double(now.QuadPart - g_last_frame.QuadPart) / double(freq.QuadPart) : 0;
+  u64 now = rt::platform::monotonic_us();
+  double dt = g_last_frame ? double(now - g_last_frame) / 1e6 : 0;
   g_last_frame = now;
   const rt::bindings::MouseSettings m = rt::bindings::mouse();
   g_cam.moved = false;
@@ -211,7 +207,7 @@ void mouse_look_frame(u32 view) {
   g_cam.steps = dt * 60;
   double t = double(m.invert_x ? -dx : dx) * m.sensitivity_x * kRadPerCount;
   double p = double(m.invert_y ? -dy : dy) * m.sensitivity_y * kRadPerCount * kPitchDownSign;
-  double at = double(now.QuadPart) / double(freq.QuadPart);
+  double at = double(now) / 1e6;
   if (t != 0) {
     g_cam.turn_at = at;
     g_cam.turn_dir = t > 0 ? 1 : -1;
@@ -477,7 +473,7 @@ struct StickCurve {
 };
 StickCurve g_curve;  // main thread
 bool g_look_inverted = false;
-LARGE_INTEGER g_stick_last{};        // the previous port 0 pad update
+u64 g_stick_last = 0;        // the previous port 0 pad update (monotonic microseconds)
 int g_stick_recent = 0;              // frames left in which the turn rate probe runs
 double g_stick_pending[2] = {0, 0};  // the mouse's turn (right +) and look (up +) the stick has not given yet (radians)
 double g_stick_heading = 0;          // the player AC's heading at the previous pad update
@@ -601,10 +597,8 @@ AxisCommand axis_command(double want, double rate, double steps, double cmax, do
 // After each port 0 pad update: the frame's mouse movement onto the right stick.
 void mouse_stick_frame(u32 pad) {
   sync_mission();
-  LARGE_INTEGER now, freq;
-  QueryPerformanceCounter(&now);
-  QueryPerformanceFrequency(&freq);
-  double dt = g_stick_last.QuadPart ? double(now.QuadPart - g_stick_last.QuadPart) / double(freq.QuadPart) : 0;
+  u64 now = rt::platform::monotonic_us();
+  double dt = g_stick_last ? double(now - g_stick_last) / 1e6 : 0;
   g_stick_last = now;
   if (g_stick_recent > 0) --g_stick_recent;
   const rt::bindings::MouseSettings m = rt::bindings::mouse();

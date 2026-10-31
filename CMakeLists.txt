@@ -39,6 +39,7 @@ endif()
 # Linux runtime: off until the platform layer and a graphics backend exist. Windows builds are
 # unaffected by this option.
 option(ACFA_BUILD_LINUX_RUNTIME "Build the native Linux runtime (requires the platform layer)" OFF)
+option(ACFA_USE_SYSTEM_SDL3 "Use an installed SDL3 instead of the pinned release" OFF)
 # Host-side tests of portable code (no game data): hashes, paths, settings parsing.
 option(ACFA_BUILD_TESTS "Build the host-side unit tests" OFF)
 
@@ -50,7 +51,7 @@ endif()
 if(NOT WIN32)
   # The Linux runtime and tools use pthreads and dlopen (Vulkan loader, SDL3).
   find_package(Threads REQUIRED)
-  add_compile_definitions(_FILE_OFFSET_BITS=64)
+  add_compile_definitions(_FILE_OFFSET_BITS=64 _GNU_SOURCE)
 endif()
 add_compile_options(-ffile-prefix-map=${CMAKE_SOURCE_DIR}=.)
 # UTF-8 process code page for every executable (paths with any characters).
@@ -119,17 +120,40 @@ if(ACFA_GEN_SRC)
   target_include_directories(acfa_ppu_gen PRIVATE ${CMAKE_SOURCE_DIR}/src)
   target_compile_options(acfa_ppu_gen PRIVATE -O2 ${ACFA_CPU_FLAGS} -fno-strict-aliasing -w)
 
-  file(GLOB ACFA_RT_SRC CONFIGURE_DEPENDS
-    ${CMAKE_SOURCE_DIR}/src/runtime/*.cpp
-    ${CMAKE_SOURCE_DIR}/src/runtime/hle/*.cpp
-    ${CMAKE_SOURCE_DIR}/src/runtime/lv2/*.cpp
-    ${CMAKE_SOURCE_DIR}/src/runtime/rsx/*.cpp
-    ${CMAKE_SOURCE_DIR}/src/runtime/gpu/*.cpp
-    ${CMAKE_SOURCE_DIR}/src/runtime/audio/*.cpp
-    ${CMAKE_SOURCE_DIR}/src/runtime/media/*.cpp
-    ${CMAKE_SOURCE_DIR}/src/runtime/game/*.cpp
-    ${CMAKE_SOURCE_DIR}/src/runtime/spu/*.cpp
-    ${CMAKE_SOURCE_DIR}/src/runtime/ui/*.cpp)
+    file(GLOB ACFA_RT_SRC CONFIGURE_DEPENDS
+      ${CMAKE_SOURCE_DIR}/src/runtime/*.cpp
+      ${CMAKE_SOURCE_DIR}/src/runtime/hle/*.cpp
+      ${CMAKE_SOURCE_DIR}/src/runtime/lv2/*.cpp
+      ${CMAKE_SOURCE_DIR}/src/runtime/rsx/*.cpp
+      ${CMAKE_SOURCE_DIR}/src/runtime/gpu/*.cpp
+      ${CMAKE_SOURCE_DIR}/src/runtime/audio/*.cpp
+      ${CMAKE_SOURCE_DIR}/src/runtime/media/*.cpp
+      ${CMAKE_SOURCE_DIR}/src/runtime/game/*.cpp
+      ${CMAKE_SOURCE_DIR}/src/runtime/spu/*.cpp
+      ${CMAKE_SOURCE_DIR}/src/runtime/ui/*.cpp)
+    if(NOT WIN32)
+      # Windows-only backends. The Linux build uses the SDL3 platform layer and the placeholder
+      # renderer until the Vulkan backend lands; keeping the D3D11 files out avoids dragging
+      # Direct3D types into the Linux build.
+      list(REMOVE_ITEM ACFA_RT_SRC
+        ${CMAKE_SOURCE_DIR}/src/runtime/gpu/renderer.cpp
+        ${CMAKE_SOURCE_DIR}/src/runtime/gpu/submit.cpp
+        ${CMAKE_SOURCE_DIR}/src/runtime/gpu/d3d11_device.cpp
+        ${CMAKE_SOURCE_DIR}/src/runtime/gpu/window.cpp
+        ${CMAKE_SOURCE_DIR}/src/runtime/gpu/display.cpp
+        ${CMAKE_SOURCE_DIR}/src/runtime/gpu/rsx_texture.cpp
+        ${CMAKE_SOURCE_DIR}/src/runtime/gpu/shader_warm.cpp
+        ${CMAKE_SOURCE_DIR}/src/runtime/gpu/png.cpp
+        ${CMAKE_SOURCE_DIR}/src/runtime/gpu/vp_hlsl.cpp
+        ${CMAKE_SOURCE_DIR}/src/runtime/gpu/fp_hlsl.cpp
+        ${CMAKE_SOURCE_DIR}/src/runtime/ui/overlay.cpp)
+      list(APPEND ACFA_RT_SRC
+        ${CMAKE_SOURCE_DIR}/src/runtime/gpu/linux/window_sdl.cpp
+        ${CMAKE_SOURCE_DIR}/src/runtime/gpu/linux/display_clock.cpp
+        ${CMAKE_SOURCE_DIR}/src/runtime/gpu/linux/device_stub.cpp
+        ${CMAKE_SOURCE_DIR}/src/runtime/gpu/linux/renderer_stub.cpp
+        ${CMAKE_SOURCE_DIR}/src/runtime/ui/overlay_stub.cpp)
+    endif()
   # Recompiled SPU code (game-derived, from local/gen/spu; never distributed).
   set(ACFA_SPU_GEN_DIR "${CMAKE_SOURCE_DIR}/local/gen/spu" CACHE PATH "Directory with acfa-spurecomp output")
   file(GLOB ACFA_SPU_GEN_SRC CONFIGURE_DEPENDS "${ACFA_SPU_GEN_DIR}/*.cpp")
@@ -151,10 +175,33 @@ if(ACFA_GEN_SRC)
     target_link_libraries(acfa PRIVATE acfa_ppu_gen acfa_spu_gen acfa_spu acfa_ppu acfa_common d3d11 dxgi d3dcompiler d2d1 dwrite ole32 psapi
                           synchronization hid setupapi)
   elseif(ACFA_BUILD_LINUX_RUNTIME)
+    # SDL3 provides the window, controller and audio device layer on Linux. Fetch a pinned release
+    # by default (WSL can otherwise find a Windows SDL3 CMake package through the /mnt prefix).
+    if(ACFA_USE_SYSTEM_SDL3)
+      find_package(SDL3 REQUIRED CONFIG)
+    else()
+      include(FetchContent)
+      set(SDL_SHARED OFF CACHE BOOL "" FORCE)
+      set(SDL_STATIC ON CACHE BOOL "" FORCE)
+      set(SDL_TEST OFF CACHE BOOL "" FORCE)
+      FetchContent_Declare(SDL3
+        URL https://github.com/libsdl-org/SDL/releases/download/release-3.4.18/SDL3-3.4.18.tar.gz
+        DOWNLOAD_EXTRACT_TIMESTAMP OFF)
+      FetchContent_MakeAvailable(SDL3)
+    endif()
+    find_package(Vulkan QUIET)
     add_executable(acfa ${ACFA_RT_SRC})
     target_include_directories(acfa PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_compile_options(acfa PRIVATE ${ACFA_CPU_FLAGS} -fno-strict-aliasing -Wall -Wextra -Wno-unused-parameter -g)
     target_link_libraries(acfa PRIVATE acfa_ppu_gen acfa_spu_gen acfa_spu acfa_ppu acfa_common Threads::Threads ${CMAKE_DL_LIBS})
+    if(TARGET SDL3::SDL3)
+      target_link_libraries(acfa PRIVATE SDL3::SDL3)
+    elseif(TARGET SDL3::SDL3-static)
+      target_link_libraries(acfa PRIVATE SDL3::SDL3-static)
+    endif()
+    if(Vulkan_FOUND)
+      target_link_libraries(acfa PRIVATE Vulkan::Vulkan)
+    endif()
   else()
     message(STATUS "Generated PPU code found, but the Linux runtime is not enabled yet "
                    "(configure with -DACFA_BUILD_LINUX_RUNTIME=ON after the platform layer is complete).")

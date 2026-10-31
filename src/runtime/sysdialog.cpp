@@ -1,9 +1,5 @@
 #include "runtime/sysdialog.h"
 
-#define WIN32_LEAN_AND_MEAN
-#include <windows.h>
-#include <xinput.h>
-
 #include <algorithm>
 #include <atomic>
 #include <cctype>
@@ -18,7 +14,10 @@
 #include "runtime/gamepads.h"
 #include "runtime/gpu/window.h"
 #include "runtime/input.h"
+#include "runtime/keycodes.h"
 #include "runtime/log.h"
+#include "runtime/pad_state.h"
+#include "runtime/platform.h"
 #include "runtime/ui/overlay.h"
 
 namespace rt::sysdlg {
@@ -35,18 +34,41 @@ bool take_live(std::string*) { return false; }  // player builds: no scripted an
 bool scripted(std::string*) { return false; }
 
 std::u16string utf16(const std::string& s) {
-  if (s.empty()) return {};
-  int n = MultiByteToWideChar(CP_UTF8, 0, s.data(), int(s.size()), nullptr, 0);
-  std::wstring w(size_t(n), L'\0');
-  MultiByteToWideChar(CP_UTF8, 0, s.data(), int(s.size()), w.data(), n);
-  return std::u16string(w.begin(), w.end());
+  std::u16string out;
+  size_t i = 0;
+  while (i < s.size()) {
+    u32 cp = u32(static_cast<unsigned char>(s[i++]));
+    if (cp >= 0xF0) {
+      if (i + 2 >= s.size()) break;
+      cp = ((cp & 0x07) << 18) | ((u32(static_cast<unsigned char>(s[i])) & 0x3F) << 12) |
+           ((u32(static_cast<unsigned char>(s[i + 1])) & 0x3F) << 6) | (u32(static_cast<unsigned char>(s[i + 2])) & 0x3F);
+      i += 3;
+    } else if (cp >= 0xE0) {
+      if (i + 1 >= s.size()) break;
+      cp = ((cp & 0x0F) << 12) | ((u32(static_cast<unsigned char>(s[i])) & 0x3F) << 6) |
+           (u32(static_cast<unsigned char>(s[i + 1])) & 0x3F);
+      i += 2;
+    } else if (cp >= 0xC0) {
+      if (i >= s.size()) break;
+      cp = ((cp & 0x1F) << 6) | (u32(static_cast<unsigned char>(s[i])) & 0x3F);
+      ++i;
+    }
+    if (cp <= 0xFFFF) {
+      out.push_back(char16_t(cp));
+    } else {
+      cp -= 0x10000;
+      out.push_back(char16_t(0xD800 + (cp >> 10)));
+      out.push_back(char16_t(0xDC00 + (cp & 0x3FF)));
+    }
+  }
+  return out;
 }
 
 std::string date_text(s64 t) {
   if (!t) return "";
   time_t tt = time_t(t);
   tm lt{};
-  localtime_s(&lt, &tt);
+  platform::local_tm(tt, &lt);
   char b[32];
   std::strftime(b, sizeof b, "%Y/%m/%d %H:%M", &lt);
   return b;
@@ -276,7 +298,7 @@ void on_mouse_button(int button, bool down, int x, int y) {
   switch (h.what) {
     case ui::DialogHit::Row:
       d->v.focus = h.index;
-      if (h.index == d->last_click_row && now - d->last_click < std::chrono::milliseconds(GetDoubleClickTime())) accept(d);
+      if (h.index == d->last_click_row && now - d->last_click < std::chrono::milliseconds(500)) accept(d);
       d->last_click_row = h.index;
       d->last_click = now;
       break;
@@ -298,8 +320,8 @@ void on_wheel(int delta) {
   if (!d || d->done || d->v.kind != ui::DialogView::List) return;
   static int rest = 0;
   rest += delta;
-  int notches = rest / WHEEL_DELTA;
-  rest -= notches * WHEEL_DELTA;
+  int notches = rest / 120;
+  rest -= notches * 120;
   if (notches) list_move(d, -notches);
 }
 

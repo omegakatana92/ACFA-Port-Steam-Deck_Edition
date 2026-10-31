@@ -1,8 +1,5 @@
 // HLE: cellGcmSys (libgcm system part): RSX memory setup, command buffer context, control
 // register, labels/reports, display buffers, flips, tiles and zcull regions.
-#define WIN32_LEAN_AND_MEAN
-#include <windows.h>
-
 #include "runtime/hle.h"
 #include "runtime/memory.h"
 #include "runtime/ppu_runtime.h"

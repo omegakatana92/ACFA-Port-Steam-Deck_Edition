@@ -3,7 +3,6 @@
 // controllers) with the keyboard and mouse; ports 1-3 map to further controllers when connected.
 // Keyboard/mouse libraries report no device (the game is played with the pad; host keyboard input
 // feeds the pad emulation instead).
-#define WIN32_LEAN_AND_MEAN
 #include <algorithm>
 #include <atomic>
 #include <cctype>
@@ -13,9 +12,6 @@
 #include <mutex>
 #include <sstream>
 #include <thread>
-
-#include <windows.h>
-#include <xinput.h>
 
 #include "common/file.h"
 #include "ppu/ppu_recomp.h"
@@ -61,7 +57,7 @@ bool g_have_last[kPorts] = {};
 bool g_was_held[kPorts] = {};     // the previous read found the controller held (system dialog, PC SETTINGS)
 u32 g_seen_release[kPorts] = {};  // sysdlg::released_count() at the previous read
 
-u8 axis(SHORT v) { return u8(std::clamp((int(v) + 32768) >> 8, 0, 255)); }
+u8 axis(s16 v) { return u8(std::clamp((int(v) + 32768) >> 8, 0, 255)); }
 
 PadState read_port(u32 port, bool deliver = false) {
   PadState s;
@@ -70,7 +66,7 @@ PadState read_port(u32 port, bool deliver = false) {
   if (xin) {
     s.connected = true;
     const auto& g = xs.Gamepad;
-    WORD b = ui::pad_suppressed(port, g.wButtons);  // buttons still held from closing PC SETTINGS stay there
+    u16 b = ui::pad_suppressed(port, g.wButtons);  // buttons still held from closing PC SETTINGS stay there
     if (b & XINPUT_GAMEPAD_BACK) s.d1 |= SELECT;
     if (b & XINPUT_GAMEPAD_LEFT_THUMB) s.d1 |= L3;
     if (b & XINPUT_GAMEPAD_RIGHT_THUMB) s.d1 |= R3;
@@ -94,7 +90,7 @@ PadState read_port(u32 port, bool deliver = false) {
     s.press[10] = g.bLeftTrigger;
     s.press[11] = g.bRightTrigger;
     // A controller in use hides the menu cursor (a stick past a third of its travel, any button).
-    auto away = [](SHORT v) { return std::abs(int(v)) > 11000; };
+    auto away = [](s16 v) { return std::abs(int(v)) > 11000; };
     if (b || g.bLeftTrigger > 30 || g.bRightTrigger > 30 || away(g.sThumbLX) || away(g.sThumbLY) || away(g.sThumbRX) ||
         away(g.sThumbRY))
       game::note_pad_input();
@@ -265,7 +261,7 @@ s32 cellPadSetActDirect(u32 port, Ptr<ActParam> p) {
   if (!g_init) return PAD_ERR_UNINITIALIZED;
   if (port >= g_max || !p) return PAD_ERR_INVALID_PARAMETER;
   if (!input_isolated())  // large motor 0-255, small motor on/off
-    pads::vibrate(int(port), WORD(WORD(p->motor[1]) * 257), WORD(p->motor[0] ? 0xC000 : 0));
+    pads::vibrate(int(port), u16(u16(p->motor[1]) * 257), u16(p->motor[0] ? 0xC000 : 0));
   return CELL_OK;
 }
 

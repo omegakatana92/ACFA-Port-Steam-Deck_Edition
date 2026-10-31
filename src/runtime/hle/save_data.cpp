@@ -8,13 +8,14 @@
 // Writes are transactional: file operations act on an in-memory copy, and only a sequence that
 // the game finishes successfully is committed, by writing a complete new directory and swapping it
 // in (an interrupted commit is repaired the next time the directory is used).
-#define WIN32_LEAN_AND_MEAN
-#include <windows.h>
-
 #include <algorithm>
 #include <filesystem>
 #include <map>
 #include <set>
+
+#ifndef _WIN32
+#include <sys/stat.h>
+#endif
 
 #include "common/file.h"
 #include "common/sfo.h"
@@ -157,10 +158,16 @@ const char* content_name(u32 type) {
 
 // Last modification time of a host file or directory, in seconds since 1970.
 s64 host_mtime(const fs::path& p) {
+#ifdef _WIN32
   WIN32_FILE_ATTRIBUTE_DATA a;
   if (!GetFileAttributesExW(p.c_str(), GetFileExInfoStandard, &a)) return 0;
   u64 t = (u64(a.ftLastWriteTime.dwHighDateTime) << 32) | a.ftLastWriteTime.dwLowDateTime;
   return s64(t / 10000000ull) - 11644473600ll;
+#else
+  struct stat a{};
+  if (::stat(p.c_str(), &a) != 0) return 0;
+  return s64(a.st_mtime);
+#endif
 }
 
 s32 free_kb(const fs::path& p) {

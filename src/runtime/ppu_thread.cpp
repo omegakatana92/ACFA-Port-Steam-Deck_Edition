@@ -1,12 +1,17 @@
 #include "runtime/ppu_thread.h"
 #include "runtime/profiler.h"
 
-#define WIN32_LEAN_AND_MEAN
-#include <windows.h>
-
 #include <deque>
 #include <map>
 #include <vector>
+
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#else
+#include <system_error>
+#include <thread>
+#endif
 
 #include "ppu/ppu_recomp.h"
 #include "runtime/game/frame_policy.h"
@@ -14,6 +19,7 @@
 #include "runtime/input.h"
 #include "runtime/log.h"
 #include "runtime/memory.h"
+#include "runtime/platform.h"
 
 namespace rt {
 namespace {
@@ -32,10 +38,15 @@ bool g_tls_init = false;
 
 constexpr u32 kStackStartOffset = 0x70;
 
+#ifdef _WIN32
 DWORD WINAPI thread_main(LPVOID p) {
+#else
+void thread_main(void* p) {
+#endif
   PpuThread* t = static_cast<PpuThread*>(p);
   t_cur = t;
   t->state = 1;
+  platform::set_current_thread_name(("ppu:" + t->name).c_str());
   u64 status = 0;
   try {
     if (t->host_main) {
@@ -64,7 +75,11 @@ DWORD WINAPI thread_main(LPVOID p) {
   LOG_I("thread", "thread 0x%x '%s' exited (status 0x%llx)", t->id, t->name.c_str(), (unsigned long long)status);
   game::thread_exited(t->name);
   if (t->tls_block) tls_free(t->tls_block);
+#ifdef _WIN32
   return 0;
+#else
+  return;
+#endif
 }
 
 }  // namespace
@@ -201,6 +216,7 @@ s32 thread_start(u32 id) {
   // creator runs first, until it blocks. Games rely on this ordering during initialization.
   bool handoff = creator && !creator->host_main && !t->host_main && t->prio < creator->prio;
   t->handoff = handoff;
+#ifdef _WIN32
   DWORD tid = 0;
   HANDLE h = CreateThread(nullptr, 64u << 20, thread_main, t, STACK_SIZE_PARAM_IS_A_RESERVATION, &tid);
   if (!h) {
@@ -212,6 +228,17 @@ s32 thread_start(u32 id) {
   std::wstring wname(t->name.begin(), t->name.end());
   SetThreadDescription(h, (L"ppu:" + wname).c_str());
   prof::register_thread("ppu:" + t->name, h);
+#else
+  // The guest stack is separate from the host stack: a fixed host stack keeps the address space
+  // predictable and matches the Windows reservation.
+  try {
+    std::thread(thread_main, t).detach();
+  } catch (const std::system_error&) {
+    t->handoff = false;
+    return CELL_EAGAIN;
+  }
+  prof::register_thread("ppu:" + t->name, nullptr);
+#endif
   LOG_I("thread", "thread 0x%x '%s' started (entry opd 0x%x, prio %d, stack 0x%x+0x%x, tls 0x%x)", t->id, t->name.c_str(),
         t->entry_opd, t->prio, t->stack_addr, t->stack_size, t->tls_block);
   input_thread_started(t->name);  // anchors for scripted input
@@ -298,7 +325,7 @@ void process_exit(s32 status) {
   g_exiting = true;
   LOG_I("process", "guest process exit (status %d)", status);
   log_flush();
-  ExitProcess(UINT(status));
+  platform::exit_process(status);
 }
 
 bool process_exiting() { return g_exiting; }

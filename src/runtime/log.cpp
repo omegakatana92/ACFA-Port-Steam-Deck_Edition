@@ -1,8 +1,5 @@
 #include "runtime/log.h"
 
-#define WIN32_LEAN_AND_MEAN
-#include <windows.h>
-
 #include <atomic>
 #include <chrono>
 #include <cstdio>
@@ -10,6 +7,7 @@
 
 #include "common/file.h"
 #include "common/privacy.h"
+#include "runtime/platform.h"
 
 namespace rt {
 namespace {
@@ -45,7 +43,7 @@ void log_write(Level l, const char* chan, const std::string& text) {
   const std::string msg = acfa::redact_personal(text);  // logs are shared as they are
   double t = log_time();
   char head[96];
-  std::snprintf(head, sizeof head, "[%9.4f %s %5lu %s] ", t, name(l), GetCurrentThreadId() % 100000, chan);
+  std::snprintf(head, sizeof head, "[%9.4f %s %5u %s] ", t, name(l), platform::current_thread_id() % 100000, chan);
   std::lock_guard lk(g_mu);
   if (g_file) {
     std::fputs(head, g_file);
@@ -79,9 +77,7 @@ void fatal(const std::string& msg) {
     g_fatal_hook();
     log_flush();
   }
-  TerminateProcess(GetCurrentProcess(), 3);
-  for (;;) {
-  }
+  platform::exit_process(3);
 }
 
 }  // namespace rt
