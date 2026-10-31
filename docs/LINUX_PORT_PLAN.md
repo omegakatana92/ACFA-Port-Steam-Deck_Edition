@@ -500,13 +500,13 @@ Only after the Vulkan renderer and a real game run are verified:
 | 2 — AC4 comparison | **complete** (documented; no code copied) |
 | 3 — Linux build system and tools | **complete and verified**; Windows build also verified with the pinned toolchain |
 | 4 — Native Linux runtime | **core compiles and starts**; game-data run untested; input/audio/window implemented; settings overlay missing |
-| 5 — Native graphics | **Stages 1–3**: verified swapchain/test pattern, DXC→SPIR-V synthetic draw, and pipeline state matrix; no surfaces/textures beyond the synthetic tests, no game rendering |
+| 5 — Native graphics | **Stages 1–4**: verified swapchain/test pattern, DXC→SPIR-V draw, pipeline state matrix, and surfaces/clears/scale/feedback; no textures beyond synthetic, no game rendering |
 | 6 — Steam Deck integration | **not started**; prerequisites not met |
 | 7 — AppImage | **not started**; must not start before Phase 5/6 verification |
 | 8 — GitHub release | **not started** |
 
-The next milestone is Stage 4: surfaces, clears, render-scale re-creation and feedback copies
-against a synthetic reference. Stages 1–3 pass; no packaging work will be published before the
+The next milestone is Stage 5: texture and sampler path (linear, swizzled/Morton, DXT, float, cube,
+mips) against the CPU converter. Stages 1–4 pass; no packaging work will be published before the
 renderer and a real game run are verified.
 
 Companion documents: `docs/VULKAN_RENDERER.md` (backend design and gates), `docs/WRITE_TRACKING.md`

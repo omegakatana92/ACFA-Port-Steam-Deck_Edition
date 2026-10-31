@@ -449,6 +449,55 @@ Pipeline state mapping for alpha/additive blend, depth LESS/GREATER, stencil wri
 culling, scissor and the CPU references. **Not verified:** all RSX blend factors, two-sided stencil,
 wireframe, depth clamp, polygon offset, sample counts, RADV/Steam Deck, game rendering.
 
+---
+
+## 15. 2026-10-31 — Vulkan Stage 4 surfaces — Ubuntu 22.04 / GCC 11.4 / lavapipe
+
+**Command**
+
+```bash
+VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.x86_64.json ./acfa-vk-surface --validate
+```
+
+**Error**
+
+```
+VUID-vkResetCommandBuffer-commandBuffer-00046: command pool does NOT have
+VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT
+```
+
+**Cause**
+
+The Stage 4 harness reuses one command buffer per step and calls `vkResetCommandBuffer`, but the
+pool was created without the reset flag.
+
+**Fix**
+
+Add `VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT` to the command pool.
+
+**Result**
+
+```
+full clear: OK
+masked clear (R/A): OK
+scissor inside/outside: OK
+depth clear 0.5 + LESS: OK
+stencil clear 7 + EQUAL: OK
+scale 64/128/32 quadrants: OK
+feedback 50% TL/BR: OK
+validation errors: 0
+```
+
+CTest: 8/8 pass.
+
+**Verified**
+
+Full/scissored/channel-masked clears, depth and stencil clear values, nearest-neighbour
+render-scale recreation at 50/100/200 %, and the render→copy→sample feedback workflow.
+**Not verified:** MRT, depth-as-colour, MSAA surfaces, float surfaces, direct self-sampling,
+RADV/Steam Deck, game rendering.
+
+
 
 
 

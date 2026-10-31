@@ -125,6 +125,17 @@ cull back/front, scissor inside/outside) and `validation errors: 0`. The test us
 target with a D24S8 attachment and per-cell scissor; the CPU reference values are in the source.
 It also records the measured front-face mapping for the negative-height viewport.
 
+## Stage 4 surface gate
+
+```bash
+VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.x86_64.json \
+  ./build/acfa-vk-surface --validate
+```
+
+Expected: all clear/scale/feedback checks `OK` and `validation errors: 0`. The test covers full and
+channel-masked clears, scissored clear, depth/stencil clear values, nearest-neighbour render-scale
+recreation (64→128→32) and the render→copy→sample feedback workflow.
+
 ## Run (expected current behaviour)
 
 ```bash

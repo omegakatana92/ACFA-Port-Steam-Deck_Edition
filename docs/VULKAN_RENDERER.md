@@ -296,14 +296,14 @@ descriptor state. See `docs/OVERLAY.md`.
 | G2 | DXC compiles a synthetic VS/PS with `Load4`, texture sample, branch loop; reflection matches the pipeline layout (**passes today**) |
 | G3 | Synthetic triangle/quad: orientation, culling, texture coordinates, negative viewport (**passes today**) |
 | G4 | State matrix: blend/depth/stencil/cull/scissor vs CPU reference (**passes today**) |
-| G5 | Surface/clear/feedback tests; render scale 50/100/200 % |
+| G5 | Surface/clear/feedback tests; render scale 50/100/200 % (**passes today**) |
 | G6 | Texture decode tests: linear, swizzled, DXT1/3/5, float, cube, mip |
 | G7 | Full draw path: vertex streams, MRT, depth-as-colour, occlusion counts |
 | G8 | Overlay walkthrough + screenshots |
 | G9 | Real game: title, movie, mission, garage, menus, save/load |
 | G10 | Steam Deck: 1280×800, 60 fps, controller-only, suspend/resume |
 
-G9/G10 require the user's own game data and Steam Deck hardware. No gate past G4 has been run.
+G9/G10 require the user's own game data and Steam Deck hardware. No gate past G5 has been run.
 
 ### 7.1 G1 evidence (2026-10-31)
 
@@ -374,6 +374,31 @@ this vertex order and negative viewport, front face is `VK_FRONT_FACE_COUNTER_CL
 
 **Not verified:** blended alpha semantics for every RSX factor, two-sided stencil, wireframe,
 depth-clamp, polygon offset, sample-count behaviour, or the same matrix on RADV.
+
+### 7.4 G5 evidence (2026-10-31)
+
+`acfa-vk-surface` exercises the surface lifecycle on a 64×64 RGBA8 target with a D24S8 attachment:
+
+| Case | Mechanism | Result |
+| --- | --- | --- |
+| full clear | render-pass `loadOp=CLEAR` (10,20,30,255) | OK |
+| masked clear | clear blue, fullscreen quad with colour write mask R/A | (255,0,255,255) |
+| scissored clear | fullscreen quad clipped to a 16×16 rect | red inside, black outside |
+| depth clear | depth clear 0.5, `LESS` at 0.75 fails, 0.25 passes | green |
+| stencil clear | stencil clear 7, `EQUAL 7` passes | green |
+| render scale 100 % | four quadrants at 64×64 | OK |
+| render scale 200 % | `vkCmdBlitImage` NEAREST to 128×128 | four quadrants preserved |
+| render scale 50 % | blit to 32×32 | corners preserved |
+| feedback copy | render A, `vkCmdCopyImage` to B, sample B while rendering A | 50 % tint correct |
+
+Khronos validation reports 0 errors after adding
+`VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT` (the harness resets one command buffer per step).
+The masked clear deliberately uses a fullscreen quad because Vulkan clears cannot honour a
+per-channel write mask, matching the planned renderer design.
+
+**Not verified:** MRT surfaces, depth-as-colour, multisampled surfaces, feedback from an image
+currently bound as a target without a copy, 16/32-bit float surfaces, or RADV.
+
 
 
 ---
