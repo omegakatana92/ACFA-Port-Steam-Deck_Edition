@@ -11,6 +11,8 @@ namespace {
 
 std::mutex g_mu;
 
+#ifdef _WIN32
+// Windows paths compare case-insensitively; canonicalise and lower-case them.
 std::wstring norm(const fs::path& p) {
   std::error_code ec;
   fs::path abs = fs::weakly_canonical(fs::absolute(p, ec), ec);
@@ -22,11 +24,26 @@ std::wstring norm(const fs::path& p) {
   while (s.size() > 3 && s.back() == L'\\') s.pop_back();
   return s;
 }
+constexpr auto kSep = L'\\';
+using NormString = std::wstring;
+#else
+// POSIX paths are case-sensitive and use '/' as the separator. Keep the platform's spelling:
+// matching a lower-cased path would let a differently-cased symlink bypass the guard.
+std::string norm(const fs::path& p) {
+  std::error_code ec;
+  fs::path abs = fs::weakly_canonical(fs::absolute(p, ec), ec);
+  std::string s = (ec ? fs::absolute(p) : abs).string();
+  while (s.size() > 1 && s.back() == '/') s.pop_back();
+  return s;
+}
+constexpr auto kSep = '/';
+using NormString = std::string;
+#endif
 
 // Built-in protected roots: the game folder inside the project root (tools run from the root)
 // and, on the development PC, the read/copy-only reference projects and the Manager's records.
 // Each tool also adds the game folders it is given at runtime.
-std::vector<std::wstring> g_protected = {
+std::vector<NormString> g_protected = {
     norm(fs::current_path() / "Armored Core - For Answer (USA)"),
 };
 
@@ -38,10 +55,10 @@ void add_protected_root(const fs::path& p) {
 }
 
 void guard_write(const fs::path& p) {
-  std::wstring n = norm(p);
+  NormString n = norm(p);
   std::lock_guard lk(g_mu);
   for (const auto& r : g_protected) {
-    if (n == r || (n.size() > r.size() && n.compare(0, r.size(), r) == 0 && n[r.size()] == L'\\'))
+    if (n == r || (n.size() > r.size() && n.compare(0, r.size(), r) == 0 && n[r.size()] == kSep))
       throw std::runtime_error("refusing to write inside protected read-only tree: " + p.string());
   }
 }

@@ -1,15 +1,19 @@
 #include "common/privacy.h"
 
+#ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#endif
 
 #include <algorithm>
 #include <cctype>
+#include <cstdlib>
 #include <vector>
 
 namespace acfa {
 namespace {
 
+#ifdef _WIN32
 std::string env_utf8(const wchar_t* name) {
   wchar_t buf[1024];
   DWORD n = GetEnvironmentVariableW(name, buf, DWORD(std::size(buf)));
@@ -19,6 +23,16 @@ std::string env_utf8(const wchar_t* name) {
   WideCharToMultiByte(CP_UTF8, 0, buf, int(n), s.data(), len, nullptr, nullptr);
   return s;
 }
+std::string home_dir() { return env_utf8(L"USERPROFILE"); }
+std::string user_name() { return env_utf8(L"USERNAME"); }
+#else
+std::string env_utf8(const char* name) {
+  const char* v = std::getenv(name);
+  return v ? std::string(v) : std::string();
+}
+std::string home_dir() { return env_utf8("HOME"); }
+std::string user_name() { return env_utf8("USER"); }
+#endif
 
 std::string lower(std::string s) {
   for (char& c : s) c = char(std::tolower(static_cast<unsigned char>(c)));
@@ -33,14 +47,14 @@ struct Patterns {
 const Patterns& patterns() {
   static const Patterns p = [] {
     Patterns r;
-    std::string profile = env_utf8(L"USERPROFILE");
+    std::string profile = home_dir();
     while (!profile.empty() && (profile.back() == '\\' || profile.back() == '/')) profile.pop_back();
     if (profile.size() > 3) {
       std::string back = lower(profile), fwd = back;
       std::replace(fwd.begin(), fwd.end(), '\\', '/');
       r.profiles = {back, fwd};
     }
-    r.user = lower(env_utf8(L"USERNAME"));
+    r.user = lower(user_name());
     if (r.user.size() < 2) r.user.clear();  // a one-letter name would blank out ordinary text
     return r;
   }();

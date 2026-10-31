@@ -1,5 +1,11 @@
 cmake_minimum_required(VERSION 3.25)
-project(acfa LANGUAGES C CXX RC)
+# RC is the Windows resource compiler. Linux has no equivalent and the .rc files carry Windows-only
+# resources, so the language and those sources are selected per platform.
+if(WIN32)
+  project(acfa LANGUAGES C CXX RC)
+else()
+  project(acfa LANGUAGES C CXX)
+endif()
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -10,7 +16,9 @@ if(NOT CMAKE_BUILD_TYPE)
   set(CMAKE_BUILD_TYPE Release)
 endif()
 
-add_compile_definitions(_WIN32_WINNT=0x0A00 WINVER=0x0A00 NOMINMAX UNICODE _UNICODE)
+if(WIN32)
+  add_compile_definitions(_WIN32_WINNT=0x0A00 WINVER=0x0A00 NOMINMAX UNICODE _UNICODE)
+endif()
 
 # The port's version (VERSION; the release's changelog names it), shown by the launcher and logged
 # by the game.
@@ -28,14 +36,29 @@ else()
   add_compile_definitions(ACFA_DEV=0)
 endif()
 
+# Linux runtime: off until the platform layer and a graphics backend exist. Windows builds are
+# unaffected by this option.
+option(ACFA_BUILD_LINUX_RUNTIME "Build the native Linux runtime (requires the platform layer)" OFF)
+# Host-side tests of portable code (no game data): hashes, paths, settings parsing.
+option(ACFA_BUILD_TESTS "Build the host-side unit tests" OFF)
+
 # Self-contained executables (no libc++/libunwind DLLs next to them), reproducible: no build
 # paths or link timestamps in the binaries.
 if(MINGW)
   add_link_options(-static -Wl,--no-insert-timestamp)
 endif()
+if(NOT WIN32)
+  # The Linux runtime and tools use pthreads and dlopen (Vulkan loader, SDL3).
+  find_package(Threads REQUIRED)
+  add_compile_definitions(_FILE_OFFSET_BITS=64)
+endif()
 add_compile_options(-ffile-prefix-map=${CMAKE_SOURCE_DIR}=.)
 # UTF-8 process code page for every executable (paths with any characters).
-set(ACFA_UTF8_RC ${CMAKE_SOURCE_DIR}/src/common/utf8.rc)
+if(WIN32)
+  set(ACFA_UTF8_RC ${CMAKE_SOURCE_DIR}/src/common/utf8.rc)
+else()
+  set(ACFA_UTF8_RC "")
+endif()
 
 # ---- third party ----
 file(GLOB ZLIB_SRC ${CMAKE_SOURCE_DIR}/third_party/zlib/*.c)
@@ -54,7 +77,12 @@ add_library(acfa_common STATIC
   src/common/settings_file.cpp
   src/common/sfo.cpp)
 target_include_directories(acfa_common PUBLIC ${CMAKE_SOURCE_DIR}/src)
-target_link_libraries(acfa_common PUBLIC acfa_zlib bcrypt)
+if(WIN32)
+  target_link_libraries(acfa_common PUBLIC acfa_zlib bcrypt)
+else()
+  # SHA-1/SHA-256 are implemented in crypto.cpp on POSIX (no CNG, no OpenSSL dependency).
+  target_link_libraries(acfa_common PUBLIC acfa_zlib Threads::Threads)
+endif()
 target_compile_options(acfa_common PRIVATE -Wall -Wextra)
 
 # ---- PPU decoding (shared by recompiler and runtime) ----
@@ -84,7 +112,7 @@ target_compile_options(acfa-recomp PRIVATE -Wall -Wextra)
 # ---- generated PPU code (game-derived, from local/gen/ppu; never distributed) ----
 set(ACFA_GEN_DIR "${CMAKE_SOURCE_DIR}/local/gen/ppu" CACHE PATH "Directory with acfa-recomp output")
 file(GLOB ACFA_GEN_SRC CONFIGURE_DEPENDS "${ACFA_GEN_DIR}/*.cpp")
-set(ACFA_CPU_FLAGS -march=haswell)  # AVX2 + FMA + BMI2 (x86-64-v3)
+set(ACFA_CPU_FLAGS "-march=haswell" CACHE STRING "CPU flags for generated code and the runtime (x86-64-v3: AVX2 + FMA + BMI2)")
 
 if(ACFA_GEN_SRC)
   add_library(acfa_ppu_gen STATIC ${ACFA_GEN_SRC})
@@ -112,15 +140,25 @@ if(ACFA_GEN_SRC)
   target_include_directories(acfa_spu_gen PRIVATE ${CMAKE_SOURCE_DIR}/src)
   target_compile_options(acfa_spu_gen PRIVATE -O2 ${ACFA_CPU_FLAGS} -fno-strict-aliasing -w)
 
-  add_executable(acfa ${ACFA_RT_SRC} ${ACFA_UTF8_RC} src/runtime/game.rc)
-  if(NOT ACFA_DEV)  # players' builds open no console window (the run log holds every message)
-    set_target_properties(acfa PROPERTIES WIN32_EXECUTABLE ON)
+  if(WIN32)
+    add_executable(acfa ${ACFA_RT_SRC} ${ACFA_UTF8_RC} src/runtime/game.rc)
+    if(NOT ACFA_DEV)  # players' builds open no console window (the run log holds every message)
+      set_target_properties(acfa PROPERTIES WIN32_EXECUTABLE ON)
+    endif()
+    target_include_directories(acfa PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_compile_options(acfa PRIVATE ${ACFA_CPU_FLAGS} -fno-strict-aliasing -Wall -Wextra -Wno-unused-parameter -g)
+    # Whole-archive: the function table references everything anyway; keeps HLE registrars alive.
+    target_link_libraries(acfa PRIVATE acfa_ppu_gen acfa_spu_gen acfa_spu acfa_ppu acfa_common d3d11 dxgi d3dcompiler d2d1 dwrite ole32 psapi
+                          synchronization hid setupapi)
+  elseif(ACFA_BUILD_LINUX_RUNTIME)
+    add_executable(acfa ${ACFA_RT_SRC})
+    target_include_directories(acfa PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_compile_options(acfa PRIVATE ${ACFA_CPU_FLAGS} -fno-strict-aliasing -Wall -Wextra -Wno-unused-parameter -g)
+    target_link_libraries(acfa PRIVATE acfa_ppu_gen acfa_spu_gen acfa_spu acfa_ppu acfa_common Threads::Threads ${CMAKE_DL_LIBS})
+  else()
+    message(STATUS "Generated PPU code found, but the Linux runtime is not enabled yet "
+                   "(configure with -DACFA_BUILD_LINUX_RUNTIME=ON after the platform layer is complete).")
   endif()
-  target_include_directories(acfa PRIVATE ${CMAKE_SOURCE_DIR}/src)
-  target_compile_options(acfa PRIVATE ${ACFA_CPU_FLAGS} -fno-strict-aliasing -Wall -Wextra -Wno-unused-parameter -g)
-  # Whole-archive: the function table references everything anyway; keeps HLE registrars alive.
-  target_link_libraries(acfa PRIVATE acfa_ppu_gen acfa_spu_gen acfa_spu acfa_ppu acfa_common d3d11 dxgi d3dcompiler d2d1 dwrite ole32 psapi
-                        synchronization hid setupapi)
 endif()
 
 # ---- preparation tool ----
@@ -135,6 +173,7 @@ target_link_libraries(acfa-prep PRIVATE acfa_common)
 target_compile_options(acfa-prep PRIVATE -Wall -Wextra)
 
 # ---- launcher (players' setup and start; no game data or game-derived code) ----
+if(WIN32)
 add_executable(acfa-launcher WIN32
   src/launcher/main.cpp
   src/launcher/setup.cpp
@@ -163,5 +202,15 @@ target_link_libraries(acfa-launcher PRIVATE acfa_common comctl32 winhttp shell32
 target_link_options(acfa-launcher PRIVATE -municode)
 target_compile_options(acfa-launcher PRIVATE -Wall -Wextra -Wno-missing-field-initializers)
 set_target_properties(acfa-launcher PROPERTIES OUTPUT_NAME ACFA-Launcher)
+endif()  # WIN32 launcher
+
+# ---- host-side tests (portable code only; no game data) ----
+if(ACFA_BUILD_TESTS)
+  enable_testing()
+  add_executable(acfa-host-tests tests/host_tests.cpp)
+  target_link_libraries(acfa-host-tests PRIVATE acfa_common)
+  target_compile_options(acfa-host-tests PRIVATE -Wall -Wextra)
+  add_test(NAME host_tests COMMAND acfa-host-tests)
+endif()
 
 # ---- media decoder test tool (development: checks the MPEG-2 decoder on the user's movies) ----

@@ -1,7 +1,13 @@
 #include "common/ini.h"
 
+#ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#else
+#include <cerrno>
+#include <cstdio>
+#include <cstring>
+#endif
 
 #include <algorithm>
 #include <cctype>
@@ -82,12 +88,22 @@ void Ini::save(const std::filesystem::path& path) const {
   std::filesystem::path tmp = path;
   tmp += ".tmp";
   write_text(tmp, text());
+#ifdef _WIN32
   if (!MoveFileExW(tmp.wstring().c_str(), path.wstring().c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
     DWORD err = GetLastError();
     std::error_code ec;
     std::filesystem::remove(tmp, ec);
     throw std::runtime_error(strprintf("cannot replace %s (error %lu)", path.string().c_str(), err));
   }
+#else
+  // rename(2) is atomic when source and destination are on the same filesystem.
+  if (std::rename(tmp.string().c_str(), path.string().c_str()) != 0) {
+    int err = errno;
+    std::error_code ec;
+    std::filesystem::remove(tmp, ec);
+    throw std::runtime_error(strprintf("cannot replace %s (%s)", path.string().c_str(), std::strerror(err)));
+  }
+#endif
 }
 
 bool Ini::has_section(const std::string& section) const {
