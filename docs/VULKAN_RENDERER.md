@@ -99,14 +99,19 @@ immediate context and `Get*` state queries. Replace them with explicit operation
 
 ### 3.1 Compiler
 
-Use DirectX Shader Compiler (DXC) with the SPIR-V backend:
+Use DirectX Shader Compiler (DXC) with the SPIR-V backend. The Stage 2 gate pins DXC 1.8.2502
+(`linux_dxc_2025_02_20.x86_64`, LLVM/SPIR-V backend) and compiles with:
 
 ```
-dxc -T vs_6_2 -E main -spirv -fspv-target-env=vulkan1.3 \
-    -fvk-use-dx-layout \
+dxc -T vs_6_2 -E vs_main -spirv -fspv-target-env=vulkan1.1 \
+    -fspv-entrypoint-name=main -fvk-use-dx-layout \
     -fvk-b-shift 0 0 -fvk-t-shift 1000 0 -fvk-s-shift 2000 0 -fvk-u-shift 3000 0 \
     -Fo <hash>.spv <generated.hlsl>
 ```
+
+(`ps_6_2` for the pixel stage.) The Vulkan 1.1 target emits SPIR-V 1.3, which is the baseline the
+tested driver accepts; a Vulkan 1.3 target emits SPIR-V 1.6. `-fspv-entrypoint-name=main` keeps the
+pipeline entry point stable (`vs_main` would otherwise be the entry point name).
 
 Why SM 6.2: `vp_hlsl.cpp` emits `ByteAddressBuffer.Load4`, introduced in SM 6.2. SM 6.0/6.1
 compilation fails.
@@ -119,11 +124,11 @@ Why the shifts: the generated HLSL reuses binding numbers across descriptor type
 
 Vulkan requires unique `(set, binding)` pairs. The shifts put buffers at 0+, textures at 1000+,
 samplers at 2000+, UAVs at 3000+, all in set 0. The pipeline layout is generated from the same
-table, and a reflection test must assert:
+table, and a reflection test asserts the emitted bindings and descriptor types.
 
-- no binding is used with two descriptor types;
-- no binding is used with incompatible stages;
-- all statically used bindings exist in the layout.
+For the Vulkan 1.1 target, DXC represents a `ByteAddressBuffer` as a `Uniform` variable with a
+`BufferBlock` decoration; that is still `VK_DESCRIPTOR_TYPE_STORAGE_BUFFER` (the pre-Vulkan-1.3
+SSBO encoding). Do not key the layout on the SPIR-V storage class alone.
 
 `-fvk-use-dx-layout` keeps D3D cbuffer packing for the `float4`/`uint4` arrays.
 
@@ -284,8 +289,8 @@ descriptor state. See `docs/OVERLAY.md`.
 | --- | --- |
 | G0 | Headless instance/device/clear/readback (**passes today**) |
 | G1 | SDL swapchain, resize, borderless/fullscreen toggle, present a CPU-generated pattern (**passes today on lavapipe + Xvfb**) |
-| G2 | DXC compiles a synthetic VS/PS with `Load4`, texture sample, branch loop; reflection matches the pipeline layout |
-| G3 | Synthetic triangle/quad: orientation, culling, texture coordinates, negative viewport |
+| G2 | DXC compiles a synthetic VS/PS with `Load4`, texture sample, branch loop; reflection matches the pipeline layout (**passes today**) |
+| G3 | Synthetic triangle/quad: orientation, culling, texture coordinates, negative viewport (**passes today**) |
 | G4 | State matrix: blend/depth/stencil/cull/scissor vs CPU reference |
 | G5 | Surface/clear/feedback tests; render scale 50/100/200 % |
 | G6 | Texture decode tests: linear, swizzled, DXT1/3/5, float, cube, mip |
@@ -294,7 +299,7 @@ descriptor state. See `docs/OVERLAY.md`.
 | G9 | Real game: title, movie, mission, garage, menus, save/load |
 | G10 | Steam Deck: 1280×800, 60 fps, controller-only, suspend/resume |
 
-G9/G10 require the user's own game data and Steam Deck hardware. No gate past G1 has been run.
+G9/G10 require the user's own game data and Steam Deck hardware. No gate past G3 has been run.
 
 ### 7.1 G1 evidence (2026-10-31)
 
@@ -313,6 +318,33 @@ Run under Xvfb with Mesa lavapipe (`SDL_VIDEODRIVER=x11`,
 `VK_ICD_FILENAMES=.../lvp_icd.x86_64.json`). `--test-present` exercises the same path from the
 runtime. This is **not** Steam Deck/RADV testing, does not compile shaders, and does not draw game
 geometry.
+
+### 7.2 G2/G3 evidence (2026-10-31)
+
+`tests/shaders/stage2.hlsl` is compiled by DXC 1.8.2502 with the shifts above. `spirv-dis` shows:
+
+```
+VS: vb Binding 1000 (BufferBlock), Params2 Binding 1 (Uniform)
+PS: tex Binding 1001 (OpTypeImage), smp Binding 2000 (OpTypeSampler), Params Binding 0 (Uniform)
+```
+
+`scripts/check-stage2-bindings.sh` asserts those bindings; `spirv-val` accepts both modules.
+`acfa-vk-draw` builds a descriptor set with exactly those bindings (UBO 0/1, storage buffer 1000,
+sampled image 1001, sampler 2000), draws a textured quad with `ByteAddressBuffer.Load4` and a
+negative-height viewport, and reads back four quadrants:
+
+```
+top-left red: OK
+top-right green: OK
+bottom-left blue: OK
+bottom-right white: OK
+validation errors: 0
+```
+
+The companion `--no-flip` run uses a normal Vulkan viewport and reports `flip sensitivity: detected
+(2 wrong quadrants)`, proving the gate would catch a wrong Y convention. CTest runs both plus the
+binding-reflection check. **Still not verified:** the real generated RSX shaders, culling/front-face
+with game geometry, and RADV/Steam Deck.
 
 ---
 

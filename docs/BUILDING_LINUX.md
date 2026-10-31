@@ -85,6 +85,34 @@ available from the runtime as `./build/acfa --test-present` (300 frames, then ex
 This validates the SDL surface, swapchain, upload, aspect-fit blit, readback, resize and
 borderless fullscreen. It does **not** validate shaders, game rendering or the Steam Deck GPU.
 
+## Stage 2 shader/draw gate (DXC)
+
+Requires DXC with the SPIR-V backend. The gate was tested with DXC 1.8.2502 (the current 1.9
+release needs glibc 2.38; Ubuntu 22.04 has 2.35).
+
+```bash
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+  -DACFA_BUILD_LINUX_RUNTIME=ON -DACFA_BUILD_TESTS=ON \
+  -DACFA_DXC_EXECUTABLE=/path/to/dxc/bin/dxc \
+  -DACFA_DXC_LIB_DIR=/path/to/dxc/lib
+cmake --build build -j"$(nproc)"
+VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.x86_64.json \
+  ./build/acfa-vk-draw --validate
+```
+
+Expected: four coloured quadrants `OK`, `validation errors: 0`. `--no-flip` must report
+`flip sensitivity: detected`; `scripts/check-stage2-bindings.sh` checks the emitted bindings.
+
+The gate compiles `tests/shaders/stage2.hlsl` at build time with:
+
+```
+-fspv-target-env=vulkan1.1 -fspv-entrypoint-name=main -fvk-use-dx-layout
+-fvk-b-shift 0 0 -fvk-t-shift 1000 0 -fvk-s-shift 2000 0 -fvk-u-shift 3000 0
+```
+
+If DXC is not configured the Stage 2 target and tests are skipped; the rest of the build is
+unaffected.
+
 ## Run (expected current behaviour)
 
 ```bash

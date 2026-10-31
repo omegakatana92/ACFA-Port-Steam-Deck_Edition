@@ -5,7 +5,7 @@
 | `LINUX_PORT_PLAN.md` | Phase 1 audit, Windows dependency inventory, AC4 comparison, phase gates | current |
 | `BUILD_LOG.md` | Every build/link error, cause, fix and verification | current |
 | `BUILDING_LINUX.md` | How to build and run the current development tree | current |
-| `VULKAN_RENDERER.md` | Vulkan backend design: bindings, shaders, resources, presentation, gates | design; Stage 1 (swapchain/test pattern) verified |
+| `VULKAN_RENDERER.md` | Vulkan backend design: bindings, shaders, resources, presentation, gates | design; Stages 1–2 verified |
 | `WRITE_TRACKING.md` | Guest-memory dirty tracking options and benchmark plan | design; not implemented |
 | `OVERLAY.md` | PC SETTINGS/system-dialog 2D layer, font and input contract | design; stub only |
 | `STEAM_DECK_AND_APPIMAGE.md` | Deck test matrix, AppImage contract, release checklist | plan; not started |

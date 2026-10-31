@@ -353,5 +353,55 @@ Swapchain creation, CPU test-pattern upload, aspect-fit blit, pixel readback, re
 borderless fullscreen on llvmpipe. **Not verified:** RADV/Steam Deck, window presentation on a
 physical display, shaders, game rendering, overlay composition.
 
+---
+
+## 13. 2026-10-31 — Vulkan Stage 2 DXC/draw — Ubuntu 22.04 / GCC 11.4 / DXC 1.8.2502 / lavapipe
+
+**Command**
+
+```bash
+cmake ... -DACFA_DXC_EXECUTABLE=<dxc>/bin/dxc -DACFA_DXC_LIB_DIR=<dxc>/lib
+cmake --build /tmp/acfa-linux
+VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.x86_64.json ./acfa-vk-draw --validate
+```
+
+**Errors and fixes**
+
+1. Current DXC (1.9.2609) requires glibc 2.38; Ubuntu 22.04 has 2.35. Pinned the older
+   `v1.8.2502` Linux release, which loads and supports `-spirv`.
+2. `-fspv-target-env=vulkan1.3` emitted SPIR-V 1.6 while the test instance requested Vulkan 1.1
+   (`Invalid SPIR-V binary version 1.6 for target environment SPIR-V 1.3`). Switched to
+   `vulkan1.1`, which emits SPIR-V 1.3.
+3. DXC named the entry point `vs_main`/`ps_main`; `VkPipelineShaderStageCreateInfo.pName` was
+   `main`. Added `-fspv-entrypoint-name=main`.
+4. The quad used a triangle strip in TL,TR,BR,BL order, which covers only half the rectangle
+   (the top-left sample stayed black). Reordered to TL,BL,TR,BR with matching UVs.
+5. The reflection script expected `OpVariable ... StorageBuffer`; with the Vulkan 1.1 target DXC
+   emits a `Uniform` variable with `BufferBlock` for `ByteAddressBuffer`. The script now checks
+   `BufferBlock` and the binding, which is still a Vulkan storage buffer.
+
+**Result**
+
+```
+top-left red: OK
+top-right green: OK
+bottom-left blue: OK
+bottom-right white: OK
+validation errors: 0
+```
+
+`--no-flip` (normal Vulkan viewport) reports `flip sensitivity: detected (2 wrong quadrants)`.
+`spirv-val` accepts both modules. CTest runs:
+`host_tests`, `vulkan_present`, `vulkan_clear`, `vulkan_stage2_draw`,
+`vulkan_stage2_flip_sensitivity`, `stage2_bindings` — **6/6 pass**.
+
+**Verified**
+
+DXC 1.8.2502 → SPIR-V 1.3, `ByteAddressBuffer.Load4`, shifted bindings (b0=0, b1=1, t0=1000,
+t1=1001, s0=2000), uniform tint, texture sampling, negative-height viewport and readback.
+**Not verified:** real generated RSX shaders, culling/front-face with game geometry, RADV/Steam
+Deck, game rendering.
+
+
 
 

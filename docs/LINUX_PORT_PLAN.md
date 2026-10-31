@@ -385,8 +385,12 @@ successfully on Mesa lavapipe (`llvmpipe`, Vulkan 1.3.255) and is a CTest test w
 `-DACFA_BUILD_TESTS=ON`. **Stage 1 is also verified:** `acfa-vk-present` (and
 `acfa --test-present`) present a CPU test pattern through an SDL swapchain at 1280×800, with a
 960×600 resize, a return to 1280×800 and a borderless fullscreen toggle, and verify a read-back
-pixel. This covers device/queue/image/memory/command-buffer/readback/swapchain/present — not
-shaders, surfaces or the game renderer.
+pixel. **Stage 2 is also verified:** DXC 1.8.2502 compiles `tests/shaders/stage2.hlsl` to SPIR-V 1.3 with
+the shifted bindings (`b0=0`, `b1=1`, `t0=1000`, `t1=1001`, `s0=2000`). `acfa-vk-draw` builds the
+matching descriptor set, draws a textured quad using `ByteAddressBuffer.Load4` and a
+negative-height viewport, and reads back the four expected quadrant colours. Validation reports no
+errors; a `--no-flip` run proves the orientation test is sensitive. This is not shaders from the
+game, culling/front-face with game geometry, RADV or Steam Deck.
 
 | Stage | Work | Gate (no game data required) |
 | --- | --- | --- |
@@ -496,14 +500,14 @@ Only after the Vulkan renderer and a real game run are verified:
 | 2 — AC4 comparison | **complete** (documented; no code copied) |
 | 3 — Linux build system and tools | **complete and verified**; Windows build also verified with the pinned toolchain |
 | 4 — Native Linux runtime | **core compiles and starts**; game-data run untested; input/audio/window implemented; settings overlay missing |
-| 5 — Native graphics | **Stage 1 only**: verified SDL swapchain/test-pattern presentation, resize and borderless fullscreen; no shaders, surfaces or game rendering |
+| 5 — Native graphics | **Stages 1–2**: verified swapchain/test pattern and DXC→SPIR-V synthetic draw (bindings, Load4, Y-flip); no surfaces/textures beyond the synthetic test, no game rendering |
 | 6 — Steam Deck integration | **not started**; prerequisites not met |
 | 7 — AppImage | **not started**; must not start before Phase 5/6 verification |
 | 8 — GitHub release | **not started** |
 
-The next milestone is Stage 2 of §8.4: DXC→SPIR-V with the corrected descriptor layout and a
-synthetic draw. The Stage 1 swapchain/test-pattern gate already passes; no packaging work will be
-published before the renderer and a real game run are verified.
+The next milestone is Stage 3: pipeline state mapping (blend/depth/stencil/raster/scissor) proven
+against a synthetic reference. Stages 1–2 pass; no packaging work will be published before the
+renderer and a real game run are verified.
 
 Companion documents: `docs/VULKAN_RENDERER.md` (backend design and gates), `docs/WRITE_TRACKING.md`
 (dirty-tracking options), `docs/OVERLAY.md` (PC SETTINGS drawing), and

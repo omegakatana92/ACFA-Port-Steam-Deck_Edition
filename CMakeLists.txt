@@ -283,6 +283,64 @@ if(ACFA_BUILD_TESTS)
     else()
       message(STATUS "Vulkan not found: the Vulkan clear smoke test is not built")
     endif()
+
+    # Stage 2 gate: DXC -> SPIR-V, shifted bindings and a synthetic draw.
+    # Set ACFA_DXC_EXECUTABLE (and ACFA_DXC_LIB_DIR if the loader is not found) to enable it.
+    set(ACFA_DXC_EXECUTABLE "" CACHE FILEPATH "dxc executable for the Vulkan Stage 2 gate")
+    set(ACFA_DXC_LIB_DIR "" CACHE PATH "Directory containing libdxcompiler.so (empty: system/default)")
+    if(NOT ACFA_DXC_EXECUTABLE)
+      find_program(_ACFA_DXC_FOUND NAMES dxc)
+      if(_ACFA_DXC_FOUND)
+        set(ACFA_DXC_EXECUTABLE "${_ACFA_DXC_FOUND}" CACHE FILEPATH "dxc executable for the Vulkan Stage 2 gate" FORCE)
+      endif()
+    endif()
+    if(ACFA_DXC_EXECUTABLE AND Vulkan_FOUND)
+      if(NOT ACFA_DXC_LIB_DIR)
+        get_filename_component(_dxc_bin_dir "${ACFA_DXC_EXECUTABLE}" DIRECTORY)
+        get_filename_component(_dxc_root "${_dxc_bin_dir}" DIRECTORY)
+        if(EXISTS "${_dxc_root}/lib/libdxcompiler.so")
+          set(ACFA_DXC_LIB_DIR "${_dxc_root}/lib")
+        endif()
+      endif()
+      set(_stage2_dir "${CMAKE_BINARY_DIR}/stage2")
+      set(_stage2_vs "${_stage2_dir}/stage2_vs.spv")
+      set(_stage2_ps "${_stage2_dir}/stage2_ps.spv")
+      set(_dxc_shifts -fvk-b-shift 0 0 -fvk-t-shift 1000 0 -fvk-s-shift 2000 0 -fvk-u-shift 3000 0)
+      set(_dxc_env "")
+      if(ACFA_DXC_LIB_DIR)
+        set(_dxc_env "${CMAKE_COMMAND}" -E env "LD_LIBRARY_PATH=${ACFA_DXC_LIB_DIR}")
+      endif()
+      add_custom_command(
+        OUTPUT ${_stage2_vs} ${_stage2_ps}
+        COMMAND ${CMAKE_COMMAND} -E make_directory ${_stage2_dir}
+        COMMAND ${_dxc_env} ${ACFA_DXC_EXECUTABLE} -T vs_6_2 -E vs_main -spirv -fspv-target-env=vulkan1.1
+                -fspv-entrypoint-name=main -fvk-use-dx-layout ${_dxc_shifts} -Fo ${_stage2_vs} ${CMAKE_SOURCE_DIR}/tests/shaders/stage2.hlsl
+        COMMAND ${_dxc_env} ${ACFA_DXC_EXECUTABLE} -T ps_6_2 -E ps_main -spirv -fspv-target-env=vulkan1.1
+                -fspv-entrypoint-name=main -fvk-use-dx-layout ${_dxc_shifts} -Fo ${_stage2_ps} ${CMAKE_SOURCE_DIR}/tests/shaders/stage2.hlsl
+        DEPENDS ${CMAKE_SOURCE_DIR}/tests/shaders/stage2.hlsl
+        COMMENT "DXC: Stage 2 HLSL -> SPIR-V (shifted bindings)"
+        VERBATIM)
+      add_custom_target(acfa-stage2-spirv DEPENDS ${_stage2_vs} ${_stage2_ps})
+      add_executable(acfa-vk-draw src/runtime/gpu/vulkan/vk_draw_test.cpp)
+      target_compile_definitions(acfa-vk-draw PRIVATE
+        "STAGE2_VS_SPV=\"${_stage2_vs}\""
+        "STAGE2_PS_SPV=\"${_stage2_ps}\"")
+      target_link_libraries(acfa-vk-draw PRIVATE Vulkan::Vulkan)
+      add_dependencies(acfa-vk-draw acfa-stage2-spirv)
+      add_test(NAME vulkan_stage2_draw COMMAND acfa-vk-draw --validate)
+      set_tests_properties(vulkan_stage2_draw PROPERTIES SKIP_RETURN_CODE 77)
+      add_test(NAME vulkan_stage2_flip_sensitivity COMMAND acfa-vk-draw --no-flip)
+      set_tests_properties(vulkan_stage2_flip_sensitivity PROPERTIES SKIP_RETURN_CODE 77)
+      find_program(SPIRV_DIS_EXECUTABLE NAMES spirv-dis)
+      if(SPIRV_DIS_EXECUTABLE)
+        add_test(NAME stage2_bindings
+          COMMAND bash ${CMAKE_SOURCE_DIR}/scripts/check-stage2-bindings.sh ${_stage2_vs} ${_stage2_ps})
+        set_tests_properties(stage2_bindings PROPERTIES SKIP_RETURN_CODE 77)
+      endif()
+      message(STATUS "Stage 2 Vulkan draw test enabled with DXC: ${ACFA_DXC_EXECUTABLE}")
+    else()
+      message(STATUS "DXC not found: the Vulkan Stage 2 draw test is not built (set ACFA_DXC_EXECUTABLE)")
+    endif()
   endif()
 endif()
 
