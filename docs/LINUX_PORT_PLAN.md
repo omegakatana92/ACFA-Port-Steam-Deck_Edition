@@ -308,9 +308,10 @@ Windows and Linux is not yet demonstrated**.
 - **VFS:** mount table (`/dev_bdvd`, `/app_home`, `/dev_hdd0`, `/dev_hdd1`, `/dev_flash`,
   save-data) with the same longest-prefix resolution and protected-root guard. POSIX paths are
   compared case-sensitively and use `/`.
-- **Saves:** unchanged `PARAM.SFO` + files, transactional directory swap. On Linux the default
-  location is `$XDG_DATA_HOME/acfa` (or `~/.local/share/acfa`) when a user directory is supplied;
-  the runtime still accepts `--data`/`--user` exactly as before.
+- **Saves:** unchanged `PARAM.SFO` + files, transactional directory swap. On Linux settings and
+  saves default to `$XDG_DATA_HOME/acfa` (or `~/.local/share/acfa`); `--data`/`--user` still work
+  exactly as before. Verified: a run with `XDG_DATA_HOME=/tmp/xdg` wrote
+  `/tmp/xdg/acfa/settings.ini`.
 - **Audio:** `cellAudio` business logic unchanged; SDL3 consumes 48 kHz float stereo frames.
 - **Video:** `cellVdec` + MPEG-2 decoder unchanged; `cellPamf`/`cellSail`/`cellAtrac` remain LLE
   firmware paths. Movie pacing still forces ≤60 Hz through `display`.

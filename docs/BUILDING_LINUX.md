@@ -69,8 +69,11 @@ run has been performed.
 ## Run (expected current behaviour)
 
 ```bash
-./build/acfa --data /path/to/writable/data --user /path/to/user-data
+./build/acfa --data /path/to/writable/data
 ```
+
+On Linux, without `--user`, settings and saves go to `$XDG_DATA_HOME/acfa` (default
+`~/.local/share/acfa`); `--user DIR` overrides that. Game data still comes from `--data`.
 
 Without prepared game data the runtime stops with:
 

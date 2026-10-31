@@ -92,6 +92,11 @@ int main(int argc, char** argv) {
     else if (a == "--keep-runs") c.keep_runs = unsigned(std::strtoul(argv[i + 1], nullptr, 10));
   }
   c.data_dir = data.string();
+#ifndef _WIN32
+  // No launcher on Linux: without --user, settings and saves live in the per-user XDG data
+  // directory instead of the game-data folder.
+  if (user.empty()) user = platform::user_data_dir("acfa");
+#endif
   // The user's game folder: by default the disc folder inside the current directory; the first
   // line of <data>\config\disc_root.txt names another one; --disc overrides both.
   c.disc_root = (root / "Armored Core - For Answer (USA)").string();
