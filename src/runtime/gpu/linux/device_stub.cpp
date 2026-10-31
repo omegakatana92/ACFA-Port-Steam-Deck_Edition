@@ -6,6 +6,7 @@
 #include "runtime/gpu/d3d11_device.h"
 #include "runtime/gpu/display.h"
 #include "runtime/gpu/shader_warm.h"
+#include "runtime/gpu/vulkan/vk_presenter.h"
 #include "runtime/log.h"
 
 namespace rt::gpu {
@@ -15,9 +16,13 @@ Device& device() {
   return d;
 }
 
-bool device_init(void*) {
-  LOG_W("gpu", "the Linux Vulkan renderer is not implemented in this build; running headless");
-  return false;
+bool device_init(void* hwnd) {
+  std::string error;
+  if (!vk::init(hwnd, &error)) {
+    LOG_E("gpu", "Vulkan presenter init failed: %s", error.c_str());
+    return false;
+  }
+  return true;
 }
 
 void shader_stats(u32* compiled, u32* cached, double* seconds) {
@@ -26,12 +31,15 @@ void shader_stats(u32* compiled, u32* cached, double* seconds) {
   if (seconds) *seconds = 0;
 }
 
-void present_rgba(const u8*, u32, u32) {}
+void present_rgba(const u8* rgba, u32 w, u32 h) {
+  std::string error;
+  if (!vk::present_rgba(rgba, w, h, &error)) LOG_W("gpu", "present failed: %s", error.c_str());
+}
 
 void request_exclusive(bool on, u32, u32, u32) { display::set_exclusive(on); }
 bool exclusive_active() { return false; }
 
-bool read_back_last_frame(std::vector<u8>&, u32&, u32&) { return false; }
+bool read_back_last_frame(std::vector<u8>& rgba, u32& w, u32& h) { return vk::last_rgba(rgba, w, h); }
 void begin_capture(u32) {}
 void poll_captures(const std::function<void(u32, std::vector<u8>&&, u32, u32)>&) {}
 

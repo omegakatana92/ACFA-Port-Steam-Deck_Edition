@@ -36,6 +36,7 @@ Targets:
 | `acfa` | runtime (only when generated PPU code exists in `local/gen/ppu`) |
 | `acfa-host-tests` | hashes, path guard, INI (no game data) |
 | `acfa-vk-smoke` | headless Vulkan clear/readback gate (no game data) |
+| `acfa-vk-present` | SDL swapchain + animated test pattern; resize/fullscreen (no game data) |
 
 Helper scripts:
 
@@ -66,6 +67,24 @@ own files). The Windows launcher automates it; a Linux setup CLI does not exist 
 this section to claim a working game run**: the Linux renderer is a placeholder and no real-data
 run has been performed.
 
+## Vulkan presentation gate (no game data)
+
+```bash
+# On a desktop:
+./build/acfa-vk-present --frames 180 --verify
+
+# Headless CI with Mesa lavapipe:
+VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.x86_64.json \
+SDL_VIDEODRIVER=x11 xvfb-run -a -s '-screen 0 1280x800x24' \
+  ./build/acfa-vk-present --frames 180 --verify
+```
+
+Expected: `presenter ready`, `frame verification: OK`, `presented 180 frames`. The same path is
+available from the runtime as `./build/acfa --test-present` (300 frames, then exit).
+
+This validates the SDL surface, swapchain, upload, aspect-fit blit, readback, resize and
+borderless fullscreen. It does **not** validate shaders, game rendering or the Steam Deck GPU.
+
 ## Run (expected current behaviour)
 
 ```bash
@@ -86,7 +105,7 @@ presented yet.
 
 ## Current limitations
 
-- No Vulkan renderer, swapchain, shader compiler or PC SETTINGS drawing.
+- Vulkan Stage 1 only: swapchain + test pattern; no shaders, surfaces or game rendering.
 - No texture write tracking on Linux; the renderer fallback hashes textures.
 - No Linux setup GUI, AppImage or release.
-- Windows builds are preserved in the source but were not validated on the audit host.
+- Windows builds are preserved in the source and verified with the pinned toolchain.

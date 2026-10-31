@@ -313,4 +313,45 @@ Windows full build and start-up verified with the pinned toolchain, using the sy
 non-game PPU table. A real game-data run and the D3D11 renderer with real shaders remain untested.
 This supersedes entry 8's environment limitation.
 
+---
+
+## 12. 2026-10-31 — Vulkan Stage 1 present — Ubuntu 22.04 / GCC 11.4 / lavapipe + Xvfb
+
+**Command**
+
+```bash
+VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.x86_64.json \
+SDL_VIDEODRIVER=x11 xvfb-run -a -s '-screen 0 1280x800x24' \
+  ./acfa-vk-present --frames 180 --verify
+```
+
+**Result**
+
+```
+presenter ready: 1280x800
+frame verification: OK
+presented 180 frames
+```
+
+`ctest` also passes `vulkan_present` (60 frames with readback) and `vulkan_clear`; the present
+test returns 77 (skip) when no display is available.
+
+**Errors fixed during implementation**
+
+- Per-image acquire semaphore used with a per-frame index: replaced with a two-frame
+  acquire/render semaphore pair.
+- `VK_ERROR_OUT_OF_DATE_KHR` after `SDL_SetWindowSize`: acquire now waits idle, recreates the
+  swapchain and retries (up to four times).
+- State reset after shutdown assigned a `State` containing a `std::mutex`; replaced with explicit
+  handle/vector reset.
+- The standalone test linked `vk_presenter.cpp` without `acfa_common`; removed renderer logging
+  from the presenter so the test only needs SDL3 + Vulkan.
+
+**Verified**
+
+Swapchain creation, CPU test-pattern upload, aspect-fit blit, pixel readback, resize and
+borderless fullscreen on llvmpipe. **Not verified:** RADV/Steam Deck, window presentation on a
+physical display, shaders, game rendering, overlay composition.
+
+
 

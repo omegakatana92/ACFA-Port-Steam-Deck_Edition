@@ -382,8 +382,11 @@ clears, copies, updates, releases, immediate callbacks), presentation and displa
 **Verified foundation (2026-10-31).** `acfa-vk-smoke` creates a Vulkan instance and device, allocates
 an offscreen image, clears it, copies it to a host-visible buffer and verifies the pixels. It ran
 successfully on Mesa lavapipe (`llvmpipe`, Vulkan 1.3.255) and is a CTest test when
-`-DACFA_BUILD_TESTS=ON`. This covers device/queue/image/memory/command-buffer/readback only — not a
-swapchain, shaders or the game renderer.
+`-DACFA_BUILD_TESTS=ON`. **Stage 1 is also verified:** `acfa-vk-present` (and
+`acfa --test-present`) present a CPU test pattern through an SDL swapchain at 1280×800, with a
+960×600 resize, a return to 1280×800 and a borderless fullscreen toggle, and verify a read-back
+pixel. This covers device/queue/image/memory/command-buffer/readback/swapchain/present — not
+shaders, surfaces or the game renderer.
 
 | Stage | Work | Gate (no game data required) |
 | --- | --- | --- |
@@ -493,14 +496,14 @@ Only after the Vulkan renderer and a real game run are verified:
 | 2 — AC4 comparison | **complete** (documented; no code copied) |
 | 3 — Linux build system and tools | **complete and verified**; Windows build also verified with the pinned toolchain |
 | 4 — Native Linux runtime | **core compiles and starts**; game-data run untested; input/audio/window implemented; settings overlay missing |
-| 5 — Native graphics | **foundation only**: verified headless Vulkan clear/readback; no swapchain, shaders or game rendering |
+| 5 — Native graphics | **Stage 1 only**: verified SDL swapchain/test-pattern presentation, resize and borderless fullscreen; no shaders, surfaces or game rendering |
 | 6 — Steam Deck integration | **not started**; prerequisites not met |
 | 7 — AppImage | **not started**; must not start before Phase 5/6 verification |
 | 8 — GitHub release | **not started** |
 
-The next milestone is Stage 1 of §8.4: a Vulkan swapchain and test-pattern presentation. The
-headless clear/readback gate already passes; no packaging work will be published before the
-renderer and a real game run are verified.
+The next milestone is Stage 2 of §8.4: DXC→SPIR-V with the corrected descriptor layout and a
+synthetic draw. The Stage 1 swapchain/test-pattern gate already passes; no packaging work will be
+published before the renderer and a real game run are verified.
 
 Companion documents: `docs/VULKAN_RENDERER.md` (backend design and gates), `docs/WRITE_TRACKING.md`
 (dirty-tracking options), `docs/OVERLAY.md` (PC SETTINGS drawing), and

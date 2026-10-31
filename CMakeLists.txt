@@ -152,6 +152,7 @@ if(ACFA_GEN_SRC)
         ${CMAKE_SOURCE_DIR}/src/runtime/gpu/linux/display_clock.cpp
         ${CMAKE_SOURCE_DIR}/src/runtime/gpu/linux/device_stub.cpp
         ${CMAKE_SOURCE_DIR}/src/runtime/gpu/linux/renderer_stub.cpp
+        ${CMAKE_SOURCE_DIR}/src/runtime/gpu/vulkan/vk_presenter.cpp
         ${CMAKE_SOURCE_DIR}/src/runtime/ui/overlay_stub.cpp)
     endif()
   # Recompiled SPU code (game-derived, from local/gen/spu; never distributed).
@@ -190,10 +191,10 @@ if(ACFA_GEN_SRC)
         DOWNLOAD_EXTRACT_TIMESTAMP OFF)
       FetchContent_MakeAvailable(SDL3)
     endif()
-    find_package(Vulkan QUIET)
+    find_package(Vulkan REQUIRED)
     add_executable(acfa ${ACFA_RT_SRC})
     target_include_directories(acfa PRIVATE ${CMAKE_SOURCE_DIR}/src)
-    target_compile_options(acfa PRIVATE ${ACFA_CPU_FLAGS} -fno-strict-aliasing -Wall -Wextra -Wno-unused-parameter -g)
+    target_compile_options(acfa PRIVATE ${ACFA_CPU_FLAGS} -fno-strict-aliasing -Wall -Wextra -Wno-unused-parameter -Wno-missing-field-initializers -g)
     target_link_libraries(acfa PRIVATE acfa_ppu_gen acfa_spu_gen acfa_spu acfa_ppu acfa_common Threads::Threads ${CMAKE_DL_LIBS})
     if(TARGET SDL3::SDL3)
       target_link_libraries(acfa PRIVATE SDL3::SDL3)
@@ -202,6 +203,14 @@ if(ACFA_GEN_SRC)
     endif()
     if(Vulkan_FOUND)
       target_link_libraries(acfa PRIVATE Vulkan::Vulkan)
+    endif()
+    if(ACFA_BUILD_TESTS AND TARGET SDL3::SDL3 AND Vulkan_FOUND)
+      add_executable(acfa-vk-present
+        src/runtime/gpu/vulkan/vk_present_test.cpp
+        src/runtime/gpu/vulkan/vk_presenter.cpp)
+      target_include_directories(acfa-vk-present PRIVATE ${CMAKE_SOURCE_DIR}/src)
+      target_compile_options(acfa-vk-present PRIVATE -Wall -Wextra -Wno-missing-field-initializers)
+      target_link_libraries(acfa-vk-present PRIVATE SDL3::SDL3 Vulkan::Vulkan)
     endif()
   else()
     message(STATUS "Generated PPU code found, but the Linux runtime is not enabled yet "
@@ -259,6 +268,10 @@ if(ACFA_BUILD_TESTS)
   target_link_libraries(acfa-host-tests PRIVATE acfa_common)
   target_compile_options(acfa-host-tests PRIVATE -Wall -Wextra)
   add_test(NAME host_tests COMMAND acfa-host-tests)
+  if(TARGET acfa-vk-present)
+    add_test(NAME vulkan_present COMMAND acfa-vk-present --frames 60 --verify)
+    set_tests_properties(vulkan_present PROPERTIES SKIP_RETURN_CODE 77)
+  endif()
 
   # Vulkan foundation gate: instance/device/image/clear/readback, headless (lavapipe works).
   if(NOT WIN32)

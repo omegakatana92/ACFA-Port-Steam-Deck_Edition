@@ -283,7 +283,7 @@ descriptor state. See `docs/OVERLAY.md`.
 | Gate | Test |
 | --- | --- |
 | G0 | Headless instance/device/clear/readback (**passes today**) |
-| G1 | SDL swapchain, resize, borderless/fullscreen toggle, present a CPU-generated pattern |
+| G1 | SDL swapchain, resize, borderless/fullscreen toggle, present a CPU-generated pattern (**passes today on lavapipe + Xvfb**) |
 | G2 | DXC compiles a synthetic VS/PS with `Load4`, texture sample, branch loop; reflection matches the pipeline layout |
 | G3 | Synthetic triangle/quad: orientation, culling, texture coordinates, negative viewport |
 | G4 | State matrix: blend/depth/stencil/cull/scissor vs CPU reference |
@@ -294,7 +294,25 @@ descriptor state. See `docs/OVERLAY.md`.
 | G9 | Real game: title, movie, mission, garage, menus, save/load |
 | G10 | Steam Deck: 1280×800, 60 fps, controller-only, suspend/resume |
 
-G9/G10 require the user's own game data and Steam Deck hardware. No gate past G0 has been run.
+G9/G10 require the user's own game data and Steam Deck hardware. No gate past G1 has been run.
+
+### 7.1 G1 evidence (2026-10-31)
+
+`src/runtime/gpu/vulkan/vk_presenter.cpp` creates the SDL Vulkan surface, device and swapchain,
+uploads a CPU test pattern, letterboxes it on black, presents, and recreates the swapchain on
+resize. `acfa-vk-present` drives 180 frames with a 960×600 resize, a return to 1280×800, and a
+borderless fullscreen toggle:
+
+```
+presenter ready: 1280x800
+frame verification: OK
+presented 180 frames
+```
+
+Run under Xvfb with Mesa lavapipe (`SDL_VIDEODRIVER=x11`,
+`VK_ICD_FILENAMES=.../lvp_icd.x86_64.json`). `--test-present` exercises the same path from the
+runtime. This is **not** Steam Deck/RADV testing, does not compile shaders, and does not draw game
+geometry.
 
 ---
 

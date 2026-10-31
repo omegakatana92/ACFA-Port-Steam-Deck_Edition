@@ -17,6 +17,9 @@
 #include "runtime/gpu/display.h"
 #include "runtime/gpu/shader_warm.h"
 #include "runtime/gpu/window.h"
+#ifndef _WIN32
+#include "runtime/gpu/vulkan/vk_presenter.h"
+#endif
 #include "runtime/platform.h"
 #include "runtime/rsx/rsx.h"
 #include "runtime/settings.h"
@@ -157,6 +160,7 @@ int main(int argc, char** argv) {
     c.window_h = d.height;
   }
   std::string level = "info";
+  [[maybe_unused]] bool test_present = false;  // --test-present (Linux Vulkan Stage 1 gate)
   [[maybe_unused]] bool pad_selftest = false;  // --pad-selftest (developer builds)
   [[maybe_unused]] std::string arena_fixes_bnd;  // --arena-fixes-selftest BND (developer builds)
   for (int i = 1; i < argc; ++i) {
@@ -167,6 +171,7 @@ int main(int argc, char** argv) {
     else if (a == "--disc") c.disc_root = next();
     else if (a == "--log-level") level = next();
     else if (a == "--warm-shaders") c.warm_shaders = true;
+    else if (a == "--test-present") test_present = true;
     else if (a == "--shader-manifest") shader_manifest = next();
     else if (a == "--pacing") c.pacing = next();
     else if (a == "--fps") {
@@ -220,6 +225,30 @@ int main(int argc, char** argv) {
   if (c.lenient) LOG_W("main", "SURVEY MODE (--lenient): unimplemented calls return 0; results are not evidence of working behaviour");
   LOG_I("main", "disc %s, prepared %s, hdd0 %s, saves %s, settings %s", c.disc_root.c_str(), c.prepared.c_str(), c.hdd0.c_str(),
         c.saves.empty() ? "in hdd0" : c.saves.c_str(), c.settings_file.c_str());
+
+#ifndef _WIN32
+  if (test_present) {  // Vulkan Stage 1 gate: window, swapchain, test pattern; no game data
+    if (!gpu::window_create("ARMORED CORE for Answer", 1280, 800, true)) return 1;
+    if (!gpu::device_init(gpu::window_handle())) {
+      LOG_E("main", "--test-present: Vulkan presenter init failed");
+      return 1;
+    }
+    auto start = std::chrono::steady_clock::now();
+    for (int i = 0; i < 300; ++i) {
+      gpu::window_pump();
+      double t = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+      std::string error;
+      if (!gpu::vk::present_test_pattern(t, &error)) {
+        LOG_E("main", "--test-present: %s", error.c_str());
+        return 1;
+      }
+      platform::sleep_ms(16);
+    }
+    LOG_I("main", "--test-present: presented 300 frames");
+    gpu::vk::shutdown();
+    return 0;
+  }
+#endif
 
   if (!vm::init()) return 1;
   install_fault_handler();

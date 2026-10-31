@@ -165,7 +165,7 @@ bool window_create(const std::string& title, int client_w, int client_h, bool vi
     LOG_E("window", "SDL video init failed: %s", SDL_GetError());
     return false;
   }
-  SDL_WindowFlags flags = SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY;
+  SDL_WindowFlags flags = SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY | SDL_WINDOW_VULKAN;
   if (!visible) flags |= SDL_WINDOW_HIDDEN;
   g_win = SDL_CreateWindow(title.c_str(), client_w, client_h, flags);
   if (!g_win) {
