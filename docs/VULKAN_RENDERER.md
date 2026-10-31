@@ -147,13 +147,17 @@ vertex shader (`res.pos = float4((win.x*rt.w*2-1)*w, (1-win.y*rt.h*2)*w, win.z*w
 Options:
 
 1. **Negative viewport height** (`viewport.height = -h`, requires Vulkan 1.1/maintenance1) and
-   reverse `frontFace` because winding is evaluated in framebuffer space. No shader changes.
+   the correct `frontFace` for the actual vertex order. No shader changes.
 2. **Generator epilogue** selected by the backend, removing the flip before DXC.
 
 Recommendation: option 1 for the first renderer (it keeps one shader source and the Windows path
 unchanged), with a synthetic orientation test that proves triangle winding, culling and texture
-orientation. If any shader relies on `SV_Position` signs in ways that break with a negative
-viewport, switch to option 2.
+orientation. The Stage 3 gate measured that, with the test's TL,BL,TR vertex order and a
+negative-height viewport, `VK_FRONT_FACE_COUNTER_CLOCKWISE` treats the quad as front; setting
+`CLOCKWISE` made `cull BACK` discard it. **Do not assume "negative viewport means reverse
+frontFace"**: derive the mapping from the actual vertex order and prove it with a winding test.
+If any shader relies on `SV_Position` signs in ways that break with a negative viewport, switch to
+option 2.
 
 ### 3.4 Other shader risks
 
@@ -291,7 +295,7 @@ descriptor state. See `docs/OVERLAY.md`.
 | G1 | SDL swapchain, resize, borderless/fullscreen toggle, present a CPU-generated pattern (**passes today on lavapipe + Xvfb**) |
 | G2 | DXC compiles a synthetic VS/PS with `Load4`, texture sample, branch loop; reflection matches the pipeline layout (**passes today**) |
 | G3 | Synthetic triangle/quad: orientation, culling, texture coordinates, negative viewport (**passes today**) |
-| G4 | State matrix: blend/depth/stencil/cull/scissor vs CPU reference |
+| G4 | State matrix: blend/depth/stencil/cull/scissor vs CPU reference (**passes today**) |
 | G5 | Surface/clear/feedback tests; render scale 50/100/200 % |
 | G6 | Texture decode tests: linear, swizzled, DXT1/3/5, float, cube, mip |
 | G7 | Full draw path: vertex streams, MRT, depth-as-colour, occlusion counts |
@@ -299,7 +303,7 @@ descriptor state. See `docs/OVERLAY.md`.
 | G9 | Real game: title, movie, mission, garage, menus, save/load |
 | G10 | Steam Deck: 1280×800, 60 fps, controller-only, suspend/resume |
 
-G9/G10 require the user's own game data and Steam Deck hardware. No gate past G3 has been run.
+G9/G10 require the user's own game data and Steam Deck hardware. No gate past G4 has been run.
 
 ### 7.1 G1 evidence (2026-10-31)
 
@@ -345,6 +349,32 @@ The companion `--no-flip` run uses a normal Vulkan viewport and reports `flip se
 (2 wrong quadrants)`, proving the gate would catch a wrong Y convention. CTest runs both plus the
 binding-reflection check. **Still not verified:** the real generated RSX shaders, culling/front-face
 with game geometry, and RADV/Steam Deck.
+
+### 7.3 G4 evidence (2026-10-31)
+
+`acfa-vk-state` draws eight 32×32 cells in one 128×128 target with a D24S8 attachment, using
+pipeline state only (no per-case shader changes):
+
+| Cell | State | Expected | Result |
+| --- | --- | --- | --- |
+| (0,0) | `SRC_ALPHA`/`ONE_MINUS_SRC_ALPHA`, two draws | (64,128,0), alpha 159 | OK |
+| (32,0) | `ONE`/`ONE`, two draws | (255,255,0) | OK |
+| (64,0) | depth `LESS`, prime 1.0, .75 then .25 | near green | OK |
+| (96,0) | depth `GREATER`, clear 0, .25 then .75 | far green | OK |
+| (0,32) | stencil `REPLACE` mask + `EQUAL` fill | green left, black right | OK |
+| (32,32) | cull `BACK`, CCW front | red | OK |
+| (64,32) | cull `FRONT`, CCW front | black | OK |
+| (96,32) | scissor inside half | red inside, black outside | OK |
+
+Khronos validation reports 0 errors. The depth `LESS` case needed a depth-only prime draw because
+the attachment is cleared to 0 and `LESS` cannot pass against it; the test makes that explicit
+rather than changing the clear per cell. The cull result also fixed an earlier assumption: with
+this vertex order and negative viewport, front face is `VK_FRONT_FACE_COUNTER_CLOCKWISE`, not
+`CLOCKWISE`.
+
+**Not verified:** blended alpha semantics for every RSX factor, two-sided stencil, wireframe,
+depth-clamp, polygon offset, sample-count behaviour, or the same matrix on RADV.
+
 
 ---
 

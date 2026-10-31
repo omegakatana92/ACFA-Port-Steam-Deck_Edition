@@ -305,22 +305,28 @@ if(ACFA_BUILD_TESTS)
       set(_stage2_dir "${CMAKE_BINARY_DIR}/stage2")
       set(_stage2_vs "${_stage2_dir}/stage2_vs.spv")
       set(_stage2_ps "${_stage2_dir}/stage2_ps.spv")
+      set(_stage3_vs "${_stage2_dir}/stage3_vs.spv")
+      set(_stage3_ps "${_stage2_dir}/stage3_ps.spv")
       set(_dxc_shifts -fvk-b-shift 0 0 -fvk-t-shift 1000 0 -fvk-s-shift 2000 0 -fvk-u-shift 3000 0)
       set(_dxc_env "")
       if(ACFA_DXC_LIB_DIR)
         set(_dxc_env "${CMAKE_COMMAND}" -E env "LD_LIBRARY_PATH=${ACFA_DXC_LIB_DIR}")
       endif()
       add_custom_command(
-        OUTPUT ${_stage2_vs} ${_stage2_ps}
+        OUTPUT ${_stage2_vs} ${_stage2_ps} ${_stage3_vs} ${_stage3_ps}
         COMMAND ${CMAKE_COMMAND} -E make_directory ${_stage2_dir}
         COMMAND ${_dxc_env} ${ACFA_DXC_EXECUTABLE} -T vs_6_2 -E vs_main -spirv -fspv-target-env=vulkan1.1
                 -fspv-entrypoint-name=main -fvk-use-dx-layout ${_dxc_shifts} -Fo ${_stage2_vs} ${CMAKE_SOURCE_DIR}/tests/shaders/stage2.hlsl
         COMMAND ${_dxc_env} ${ACFA_DXC_EXECUTABLE} -T ps_6_2 -E ps_main -spirv -fspv-target-env=vulkan1.1
                 -fspv-entrypoint-name=main -fvk-use-dx-layout ${_dxc_shifts} -Fo ${_stage2_ps} ${CMAKE_SOURCE_DIR}/tests/shaders/stage2.hlsl
-        DEPENDS ${CMAKE_SOURCE_DIR}/tests/shaders/stage2.hlsl
-        COMMENT "DXC: Stage 2 HLSL -> SPIR-V (shifted bindings)"
+        COMMAND ${_dxc_env} ${ACFA_DXC_EXECUTABLE} -T vs_6_2 -E vs_main -spirv -fspv-target-env=vulkan1.1
+                -fspv-entrypoint-name=main -fvk-use-dx-layout ${_dxc_shifts} -Fo ${_stage3_vs} ${CMAKE_SOURCE_DIR}/tests/shaders/stage3.hlsl
+        COMMAND ${_dxc_env} ${ACFA_DXC_EXECUTABLE} -T ps_6_2 -E ps_main -spirv -fspv-target-env=vulkan1.1
+                -fspv-entrypoint-name=main -fvk-use-dx-layout ${_dxc_shifts} -Fo ${_stage3_ps} ${CMAKE_SOURCE_DIR}/tests/shaders/stage3.hlsl
+        DEPENDS ${CMAKE_SOURCE_DIR}/tests/shaders/stage2.hlsl ${CMAKE_SOURCE_DIR}/tests/shaders/stage3.hlsl
+        COMMENT "DXC: Stage 2/3 HLSL -> SPIR-V (shifted bindings)"
         VERBATIM)
-      add_custom_target(acfa-stage2-spirv DEPENDS ${_stage2_vs} ${_stage2_ps})
+      add_custom_target(acfa-stage2-spirv DEPENDS ${_stage2_vs} ${_stage2_ps} ${_stage3_vs} ${_stage3_ps})
       add_executable(acfa-vk-draw src/runtime/gpu/vulkan/vk_draw_test.cpp)
       target_compile_definitions(acfa-vk-draw PRIVATE
         "STAGE2_VS_SPV=\"${_stage2_vs}\""
@@ -331,6 +337,15 @@ if(ACFA_BUILD_TESTS)
       set_tests_properties(vulkan_stage2_draw PROPERTIES SKIP_RETURN_CODE 77)
       add_test(NAME vulkan_stage2_flip_sensitivity COMMAND acfa-vk-draw --no-flip)
       set_tests_properties(vulkan_stage2_flip_sensitivity PROPERTIES SKIP_RETURN_CODE 77)
+
+      add_executable(acfa-vk-state src/runtime/gpu/vulkan/vk_state_test.cpp)
+      target_compile_definitions(acfa-vk-state PRIVATE
+        "STAGE3_VS_SPV=\"${_stage3_vs}\""
+        "STAGE3_PS_SPV=\"${_stage3_ps}\"")
+      target_link_libraries(acfa-vk-state PRIVATE Vulkan::Vulkan)
+      add_dependencies(acfa-vk-state acfa-stage2-spirv)
+      add_test(NAME vulkan_stage3_state COMMAND acfa-vk-state --validate)
+      set_tests_properties(vulkan_stage3_state PROPERTIES SKIP_RETURN_CODE 77)
       find_program(SPIRV_DIS_EXECUTABLE NAMES spirv-dis)
       if(SPIRV_DIS_EXECUTABLE)
         add_test(NAME stage2_bindings

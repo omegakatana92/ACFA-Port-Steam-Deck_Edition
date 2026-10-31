@@ -113,6 +113,18 @@ The gate compiles `tests/shaders/stage2.hlsl` at build time with:
 If DXC is not configured the Stage 2 target and tests are skipped; the rest of the build is
 unaffected.
 
+## Stage 3 state matrix gate
+
+```bash
+VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.x86_64.json \
+  ./build/acfa-vk-state --validate
+```
+
+Expected: ten checks `OK` (alpha/additive blend, depth LESS/GREATER, stencil inside/outside,
+cull back/front, scissor inside/outside) and `validation errors: 0`. The test uses one 128×128
+target with a D24S8 attachment and per-cell scissor; the CPU reference values are in the source.
+It also records the measured front-face mapping for the negative-height viewport.
+
 ## Run (expected current behaviour)
 
 ```bash

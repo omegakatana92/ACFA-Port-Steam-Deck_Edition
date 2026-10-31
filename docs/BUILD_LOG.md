@@ -402,6 +402,54 @@ t1=1001, s0=2000), uniform tint, texture sampling, negative-height viewport and 
 **Not verified:** real generated RSX shaders, culling/front-face with game geometry, RADV/Steam
 Deck, game rendering.
 
+---
+
+## 14. 2026-10-31 — Vulkan Stage 3 state matrix — Ubuntu 22.04 / GCC 11.4 / lavapipe
+
+**Command**
+
+```bash
+VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.x86_64.json ./acfa-vk-state --validate
+```
+
+**Errors and fixes**
+
+1. Alpha-blend check expected alpha 255, but the test blended alpha too (0.5 over 0.75 is 0.625 =
+   159). The CPU reference now expects 159 for that cell; the colour channels were already correct.
+2. Depth `LESS` produced black: the depth attachment is cleared to 0.0, and `LESS` cannot pass
+   against 0. Added a depth-only `ALWAYS` prime draw at z=1.0 for the `LESS` cell. `GREATER` works
+   against the 0 clear directly.
+3. Culling was inverted relative to the first assumption. With the test's TL,BL,TR vertex order and
+   a negative-height viewport, `frontFace = COUNTER_CLOCKWISE` keeps the quad and
+   `CLOCKWISE` discards it. The test now uses CCW and the docs no longer claim that a negative
+   viewport always reverses `frontFace`.
+
+**Result**
+
+```
+alpha blend: OK (64,128,0,159)
+additive blend: OK (255,255,0,255)
+depth LESS: OK (0,255,0,255)
+depth GREATER: OK (0,255,0,255)
+stencil inside: OK (0,255,0,255)
+stencil outside: OK (0,0,0,255)
+cull back keeps front: OK (255,0,0,255)
+cull front removes it: OK (0,0,0,255)
+scissor inside: OK (255,0,0,255)
+scissor outside: OK (0,0,0,255)
+validation errors: 0
+```
+
+CTest: 7/7 pass (`host_tests`, `vulkan_present`, `vulkan_clear`, `vulkan_stage2_draw`,
+`vulkan_stage2_flip_sensitivity`, `vulkan_stage3_state`, `stage2_bindings`).
+
+**Verified**
+
+Pipeline state mapping for alpha/additive blend, depth LESS/GREATER, stencil write/test, back/front
+culling, scissor and the CPU references. **Not verified:** all RSX blend factors, two-sided stencil,
+wireframe, depth clamp, polygon offset, sample counts, RADV/Steam Deck, game rendering.
+
+
 
 
 
