@@ -501,3 +501,7 @@ Only after the Vulkan renderer and a real game run are verified:
 The next milestone is Stage 1 of §8.4: a Vulkan swapchain and test-pattern presentation. The
 headless clear/readback gate already passes; no packaging work will be published before the
 renderer and a real game run are verified.
+
+Companion documents: `docs/VULKAN_RENDERER.md` (backend design and gates), `docs/WRITE_TRACKING.md`
+(dirty-tracking options), `docs/OVERLAY.md` (PC SETTINGS drawing), and
+`docs/STEAM_DECK_AND_APPIMAGE.md` (hardware matrix and packaging contract).
